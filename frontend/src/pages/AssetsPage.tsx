@@ -1,7 +1,7 @@
 /** 素材页：LLM 提取素材 + 按类型分 Tab 展示 + 编辑描述 */
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { extractAssets, listAssets, updateAsset, uploadAssetListTxt } from '../api'
+import { extractAssets, listAssets, updateAsset, uploadAssetListTxt, deleteAsset } from '../api'
 import { ErrBox, ScriptSelector, TaskBar, useScriptId } from '../components'
 import { usePollTask } from '../usePollTask'
 import type { Asset } from '../types'
@@ -42,8 +42,8 @@ export default function AssetsPage() {
     }
   }
 
-  const refresh = () => listAssets(projectId).then(setAssets).catch(e => setError(e.message))
-  useEffect(() => { refresh() }, [projectId])
+  const refresh = () => listAssets(projectId, scriptId).then(setAssets).catch(e => setError(e.message))
+  useEffect(() => { refresh() }, [projectId, scriptId])
   useEffect(() => { if (task?.status === 'success') refresh() }, [task?.status])
 
   const start = async () => {
@@ -116,7 +116,17 @@ export default function AssetsPage() {
               )}
             </div>
             {editing !== a.id && (
-              <button onClick={() => { setEditing(a.id); setDraft(a.description) }}>编辑描述</button>
+              <>
+                <button onClick={() => { setEditing(a.id); setDraft(a.description) }}>编辑描述</button>
+                <button
+                  className="danger"
+                  title="删除素材及其全部候选图"
+                  onClick={async () => {
+                    if (!window.confirm(`确定删除素材「${a.name}」？其全部候选图也会被删除。`)) return
+                    try { await deleteAsset(a.id); refresh() } catch (e: any) { setError(e.message) }
+                  }}
+                >删除</button>
+              </>
             )}
           </div>
         ))}

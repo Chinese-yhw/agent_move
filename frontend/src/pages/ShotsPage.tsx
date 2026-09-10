@@ -1,7 +1,9 @@
-/** 镜头页：分镜列表 + 首帧（标准照）选择 + 视频抽卡生成 + 候选审核通过 */
+/** 镜头页：分镜列表 + 首帧图生成（image_prompt + IP-Adapter）+ 视频抽卡 + 候选审核 */
 import { useEffect, useState } from 'react'
 import {
-  approveVideo, cancelTask, deleteVideoCandidate, genVideo, listScriptAssets, listShots, listVideoCandidates, setShotFirstFrame,
+  approveVideo, cancelTask, deleteVideoCandidate, deleteShot, genVideo, listScriptAssets, listShots, listVideoCandidates, setShotFirstFrame,
+  genShotImages, listShotImages, selectShotImage,
+  type ShotImageCand,
 } from '../api'
 import { ErrBox, ScriptSelector, TaskBar, useScriptId } from '../components'
 import { usePollTask } from '../usePollTask'
@@ -32,8 +34,10 @@ export default function ShotsPage() {
         <ScriptSelector />
       </div>
       <p className="muted" style={{ marginTop: -6 }}>
-        每个镜头会用关联角色/场景的<b>标准照作为视频首帧</b>（蓝框标注）。可手动为镜头指定首帧；
-        没有标准照时请先到「标准照」页生成并锁定。
+        <b>推荐流程</b>：先到「标准照」页为角色/场景生成并锁定标准照 →
+        回到本页点 <b>「🖼 生成首帧图」</b>（用 CSV 的 image_prompt + IP-Adapter 参考标准照）→
+        选一张作为首帧 → 再点 <b>「🎬 生成视频」</b>（I2V，画面会动起来）。
+        没生成专属首帧图时，会用关联素材的标准照作为首帧。
       </p>
       {shots.length === 0 && <p className="muted">暂无镜头，请先在「剧本」页提交分镜。</p>}
       <ErrBox error={error} />
@@ -47,23 +51,26 @@ export default function ShotsPage() {
  *  切到别的页面再回来，进度条会从 localStorage / 后端任务恢复 */
 function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[]; onChanged: () => void }) {
   const [cands, setCands] = useState<VideoCandidate[] | null>(null)
+  const [imgCands, setImgCands] = useState<ShotImageCand[] | null>(null)
   const [open, setOpen] = useState(false)
+  const [openImgs, setOpenImgs] = useState(false)
   const [taskId, setTaskId] = useState<number | null>(null)
+  const [imgTaskId, setImgTaskId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [zoom, setZoom] = useState<string | null>(null)
   const [frameBusy, setFrameBusy] = useState(false)
   const [useT2V, setUseT2V] = useState(false)
   const { task, polling } = usePollTask(taskId, `video:${s.id}`)
+  const { task: imgTask, polling: imgPolling } = usePollTask(imgTaskId, `shot-image:${s.id}`)
 
-  // 当前生效首帧：手动指定优先，否则 refs 中 is_first_frame 的那个（后端自动选取）
+  // 当前生效首帧：专属首帧图 > 手动指定素材 > refs 中 is_first_frame 的那个
   const firstRef = s.refs.find(r => r.is_first_frame)
-  // 首帧下拉列项目所有素材（不管有没有标准照），让用户能提前指定
-  const lockedAssets = assets.filter(a => a.standard_image)
   const allAssets = assets
-  const hasFirstFrame = Boolean(firstRef)
+  const hasFirstFrame = Boolean(s.first_frame_image || firstRef)
 
   const loadCands = () =>
     listVideoCandidates(s.id).then(setCands).catch(e => setError(e.message))
+  const loadImgCands = () =>
+    listShotImages(s.id).then(setImgCands).catch(e => setError(e.message))
 
   useEffect(() => {
     if (task?.status === 'success') {
@@ -71,8 +78,13 @@ function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[];
       loadCands()
       onChanged()
     }
+    if (imgTask?.status === 'success') {
+      setOpenImgs(true)
+      loadImgCands()
+      onChanged()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task?.status])
+  }, [task?.status, imgTask?.status])
 
   const changeFirstFrame = async (assetIdStr: string) => {
     setError(null)
@@ -84,6 +96,28 @@ function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[];
       setError(e.message)
     } finally {
       setFrameBusy(false)
+    }
+  }
+
+  const generateImage = async () => {
+    setError(null)
+    try {
+      const t = await genShotImages(s.id, 2)
+      setImgTaskId(t.id)
+      setOpenImgs(true)
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  const pickImage = async (cid: number) => {
+    setError(null)
+    try {
+      await selectShotImage(s.id, cid)
+      await loadImgCands()
+      onChanged()
+    } catch (e: any) {
+      setError(e.message)
     }
   }
 
@@ -114,8 +148,19 @@ function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[];
         <span className={`badge ${STATUS_BADGE[s.status] ?? 'gray'}`}>{s.status}</span>
         <span className="muted">{s.scene} · {s.shot_size} · {s.camera_movement} · {s.duration}s</span>
         <span style={{ flex: 1 }} />
+        <button disabled={imgPolling} onClick={generateImage} title="用 CSV 的 image_prompt 生成镜头专属首帧图（IP-Adapter 参考角色/场景标准照）">
+          {imgPolling ? '生图…' : '🖼 生成首帧图 ×2'}
+        </button>
+        {imgPolling && imgTaskId && (
+          <button className="danger" onClick={async () => {
+            try { await cancelTask(imgTaskId); setImgTaskId(null); } catch (e: any) { setError(e.message) }
+          }}>⛔ 取消</button>
+        )}
+        <button onClick={() => { setOpenImgs(!openImgs); loadImgCands() }}>
+          {openImgs ? '收起图候选' : '图候选'}
+        </button>
         <button className="primary" disabled={polling} onClick={generate}>
-          {polling ? '生成中…' : '生成视频 ×2'}
+          {polling ? '生成中…' : '🎬 生成视频 ×2'}
         </button>
         {polling && taskId && (
           <button className="danger" onClick={async () => {
@@ -126,18 +171,62 @@ function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[];
         )}
         <label style={{ marginLeft: 8, fontSize: 12, cursor: 'pointer' }}>
           <input type="checkbox" checked={useT2V} onChange={e => setUseT2V(e.target.checked)} />
-          <span style={{ marginLeft: 4 }}>🎬 特效模式（文生视频，跳过首帧）</span>
+          <span style={{ marginLeft: 4 }}>特效模式（文生视频，跳过首帧）</span>
         </label>
         <button onClick={() => { setOpen(!open); loadCands() }}>
           {open ? '收起候选' : '查看候选'}
         </button>
+        <button className="danger" title="删除此镜头（及其全部候选视频和台词）"
+          onClick={async () => {
+            if (!window.confirm(`确定删除镜头 #${s.shot_no}？其候选视频和台词也会被一并删除。`)) return
+            try { await deleteShot(s.id); onChanged() } catch (e: any) { setError(e.message) }
+          }}
+        >🗑 删镜头</button>
       </div>
       {!hasFirstFrame && !useT2V && (
         <div style={{ color: '#e09050', fontSize: 12, marginTop: 4 }}>
-          ⚠️ 该镜头无首帧，未勾选特效模式会被拒绝生成
+          ⚠️ 该镜头无首帧图（也没关联素材标准照），未勾选特效模式会被拒绝生成视频
         </div>
       )}
       <div className="desc">{s.description}</div>
+      {s.image_prompt && (
+        <details style={{ marginTop: 4 }}>
+          <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>📷 image_prompt（CSV 导入）</summary>
+          <div style={{ fontSize: 12, color: '#888', padding: '4px 8px', background: '#1a1a1a', borderRadius: 4 }}>
+            <div><b>正:</b> {s.image_prompt}</div>
+            {s.negative_prompt && <div><b>负:</b> {s.negative_prompt}</div>}
+          </div>
+        </details>
+      )}
+
+      {/* 镜头专属首帧图（image_prompt 生成） */}
+      {s.first_frame_image && (
+        <div className="shot-first-frame" style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="badge green">已选首帧</span>
+          <img src={s.first_frame_image} alt="镜头首帧" style={{ width: 160, borderRadius: 4 }} />
+          <span className="muted" style={{ fontSize: 12 }}>此图作为视频 I2V 的首帧</span>
+        </div>
+      )}
+
+      {/* 镜头首帧图候选 */}
+      {openImgs && (
+        <div className="image-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8, marginTop: 8 }}>
+          {(imgCands ?? []).length === 0 && <span className="muted">暂无首帧图候选，点上方「生成首帧图」</span>}
+          {(imgCands ?? []).map(c => (
+            <div key={c.id} style={{ position: 'relative' }}>
+              <img src={c.image_url} alt="候选" style={{ width: '100%', borderRadius: 4, border: c.is_selected ? '2px solid #4caf50' : '1px solid #333' }} />
+              <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                <button style={{ flex: 1, padding: '2px 4px', fontSize: 11 }}
+                  disabled={c.is_selected} onClick={() => pickImage(c.id)}>
+                  {c.is_selected ? '已选' : '选为首帧'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <ErrBox error={error || (imgTask?.status === 'failed' ? imgTask.error : null)} />
+      <TaskBar task={imgTask} polling={imgPolling} label="首帧图生成（约 30~60s）" />
 
       {/* 关联素材与首帧 */}
       <div className="shot-refs">

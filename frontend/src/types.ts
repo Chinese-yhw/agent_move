@@ -37,6 +37,8 @@ export interface ShotInput {
   shot_no: number
   scene: string
   description: string
+  image_prompt: string
+  negative_prompt: string
   motion_prompt: string
   duration: number
   camera_movement: string
@@ -62,6 +64,8 @@ export interface Shot {
   shot_no: number
   scene: string
   description: string
+  image_prompt: string
+  negative_prompt: string
   motion_prompt: string
   duration: number
   camera_movement: string
@@ -70,6 +74,7 @@ export interface Shot {
   character_ids: number[]
   scene_id: number | null
   first_frame_asset_id: number | null
+  first_frame_image: string | null
   refs: ShotRef[]
   dialogues: { id: number; character: string; text: string; emotion: string }[]
 }
@@ -103,6 +108,7 @@ export interface VideoCandidate {
 
 export interface Dialogue {
   id: number
+  shot_id: number
   shot_no: number
   character_id: number | null
   speaker_name: string

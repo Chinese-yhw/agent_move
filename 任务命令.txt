@@ -2,4 +2,16 @@
 
 npm run dev   前端
 
+
 .\.venv\Scripts\celery -A app.tasks.celery_app.celery_app worker --loglevel=info --pool=solo     任务
+
+
+项目列表 → 进入「血月」→ 剧本页（看分镜表 / 选剧本）
+    ↓
+🖼 标准照页 → 给每个素材（角色/场景/道具）点「生成候选 ×4」→ 挑一张「设为标准照」
+    ↓
+🎬 镜头页 → 每个镜头会自动用角色/场景的标准照当首帧 → 点「生成视频 ×2」→ 审核通过一条
+    ↓
+🔊 配音页 → 点「批量配音」
+    ↓
+📦 合成页 → 点「合成整集

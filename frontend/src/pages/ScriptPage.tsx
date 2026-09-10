@@ -3,13 +3,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom'
 import {
   createScript, deleteScript, generateStoryboard, listScripts, listShots,
-  replaceShots, updateScript, uploadStoryboardTxt,
+  replaceShots, updateScript, uploadStoryboardTxt, uploadCsvPrompts,
 } from '../api'
 import { ErrBox } from '../components'
 import type { Script, ShotInput } from '../types'
 
 const emptyShot = (no: number): ShotInput => ({
-  shot_no: no, scene: '', description: '', motion_prompt: '', duration: 5,
+  shot_no: no, scene: '', description: '', image_prompt: '', negative_prompt: '',
+  motion_prompt: '', duration: 5,
   camera_movement: '', shot_size: '', character_names: [], dialogues: [],
 })
 
@@ -76,6 +77,8 @@ function parseStoryboardTable(text: string): ShotInput[] {
       shot_no: parseInt(noRaw, 10) || i + 1,
       scene: pick(cols, '场景', '场景名'),
       description: pick(cols, '画面描述', '描述'),
+      image_prompt: '',
+      negative_prompt: '',
       motion_prompt: '',
       duration,
       camera_movement: pick(cols, '运镜/音效提示', '运镜', '运镜/音效'),
@@ -104,6 +107,7 @@ export default function ScriptPage() {
   const [showPaste, setShowPaste] = useState(false)
   const [pasteText, setPasteText] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const csvRef = useRef<HTMLInputElement>(null)
 
   /** 上传分镜表 txt：后端整体替换该剧本的分镜 */
   const onUploadTxt = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -113,11 +117,37 @@ export default function ScriptPage() {
     setBusy(true); setError(null); setMsg(null)
     try {
       const r = await uploadStoryboardTxt(scriptId, file)
-      setMsg(`已导入 ${r.created} 条分镜`)
+      setMsg(`已导入 ${r.created} 条分镜${r.format ? `（${r.format}）` : ''}`)
       await refreshList() // 刷新历史列表（shot_count 变化）
       const list = await listShots(scriptId).catch(() => [])
       setShots(list.map(sh => ({
         shot_no: sh.shot_no, scene: sh.scene, description: sh.description,
+        image_prompt: sh.image_prompt ?? '', negative_prompt: sh.negative_prompt ?? '',
+        motion_prompt: sh.motion_prompt, duration: sh.duration,
+        camera_movement: sh.camera_movement, shot_size: sh.shot_size,
+        character_names: [], dialogues: [],
+      })))
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** 上传 CSV 提示词表（2.csv 格式）：覆盖镜头 prompt + 自动提取素材 */
+  const onUploadCsv = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || !scriptId) return
+    setBusy(true); setError(null); setMsg(null)
+    try {
+      const r = await uploadCsvPrompts(scriptId, file)
+      setMsg(`CSV 导入完成：解析 ${r.shots_parsed} 镜，更新 ${r.shots_updated} 镜，新建 ${r.shots_created} 镜，提取素材 ${r.assets_created} 个`)
+      await refreshList()
+      const list = await listShots(scriptId).catch(() => [])
+      setShots(list.map(sh => ({
+        shot_no: sh.shot_no, scene: sh.scene, description: sh.description,
+        image_prompt: sh.image_prompt ?? '', negative_prompt: sh.negative_prompt ?? '',
         motion_prompt: sh.motion_prompt, duration: sh.duration,
         camera_movement: sh.camera_movement, shot_size: sh.shot_size,
         character_names: [], dialogues: [],
@@ -182,6 +212,7 @@ export default function ScriptPage() {
     listShots(scriptId).then(list =>
       setShots(list.map(sh => ({
         shot_no: sh.shot_no, scene: sh.scene, description: sh.description,
+        image_prompt: sh.image_prompt ?? '', negative_prompt: sh.negative_prompt ?? '',
         motion_prompt: sh.motion_prompt, duration: sh.duration,
         camera_movement: sh.camera_movement, shot_size: sh.shot_size,
         character_names: [], dialogues: [],
@@ -255,6 +286,7 @@ export default function ScriptPage() {
       const fresh = await listShots(scriptId)
       setShots(fresh.map(s => ({
         shot_no: s.shot_no, scene: (s as any).scene ?? '', description: s.description,
+        image_prompt: (s as any).image_prompt ?? '', negative_prompt: (s as any).negative_prompt ?? '',
         motion_prompt: s.motion_prompt ?? '', duration: s.duration,
         camera_movement: s.camera_movement ?? '', shot_size: s.shot_size ?? '',
         character_names: (s as any).character_names ?? [],
@@ -337,17 +369,21 @@ export default function ScriptPage() {
           <table>
             <thead>
               <tr>
-                <th>镜号</th><th>场景</th><th>画面描述</th><th>动作提示词</th>
+                <th>镜号</th><th>场景</th><th>画面描述</th>
+                <th>正面 Prompt (image_prompt)</th><th>负面 Prompt (negative_prompt)</th>
+                <th>动作提示词</th>
                 <th>时长(s)</th><th>运镜</th><th>景别</th><th>操作</th>
               </tr>
             </thead>
             <tbody>
-              {shots.length === 0 && <tr><td colSpan={8} className="muted">该剧本暂无分镜，可用「AI 生成分镜」或手动添加。</td></tr>}
+              {shots.length === 0 && <tr><td colSpan={10} className="muted">该剧本暂无分镜，可用「AI 生成分镜」或手动添加。</td></tr>}
               {shots.map((s, i) => (
                 <tr key={i}>
                   <td><input type="number" style={{ width: 52 }} value={s.shot_no} onChange={e => patch(i, 'shot_no', Number(e.target.value))} /></td>
                   <td><input value={s.scene} onChange={e => patch(i, 'scene', e.target.value)} /></td>
                   <td><input value={s.description} onChange={e => patch(i, 'description', e.target.value)} /></td>
+                  <td><input value={s.image_prompt} onChange={e => patch(i, 'image_prompt', e.target.value)} placeholder="文生图正提示词（CSV 导入）" /></td>
+                  <td><input value={s.negative_prompt} onChange={e => patch(i, 'negative_prompt', e.target.value)} placeholder="文生图负提示词（CSV 导入）" /></td>
                   <td><input value={s.motion_prompt} onChange={e => patch(i, 'motion_prompt', e.target.value)} /></td>
                   <td><input type="number" style={{ width: 52 }} value={s.duration} onChange={e => patch(i, 'duration', Number(e.target.value))} /></td>
                   <td><input value={s.camera_movement} onChange={e => patch(i, 'camera_movement', e.target.value)} /></td>
@@ -360,8 +396,10 @@ export default function ScriptPage() {
           <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
             <button onClick={() => setShots(prev => [...prev, emptyShot(prev.length + 1)])}>＋ 添加一行</button>
             <button onClick={() => setShowPaste(v => !v)}>📋 粘贴表格导入</button>
-            <button disabled={busy} onClick={() => fileRef.current?.click()}>📄 上传分镜表 txt</button>
-            <input ref={fileRef} type="file" accept=".txt" style={{ display: 'none' }} onChange={onUploadTxt} />
+            <button disabled={busy} onClick={() => fileRef.current?.click()}>📄 上传分镜表 txt/md</button>
+            <input ref={fileRef} type="file" accept=".txt,.md" style={{ display: 'none' }} onChange={onUploadTxt} />
+            <button disabled={busy} onClick={() => csvRef.current?.click()}>📑 上传 CSV 提示词</button>
+            <input ref={csvRef} type="file" accept=".csv" style={{ display: 'none' }} onChange={onUploadCsv} />
             <button className="primary" disabled={busy || shots.length === 0} onClick={submitShots}>批量提交分镜</button>
           </div>
 

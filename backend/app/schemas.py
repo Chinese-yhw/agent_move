@@ -45,10 +45,15 @@ class ShotIn(BaseModel):
     shot_no: int
     scene: str = ""
     description: str = ""
+    image_prompt: str = ""
+    negative_prompt: str = ""
     motion_prompt: str = ""
     duration: float = 5.0
     camera_movement: str = ""
     shot_size: str = ""
+    dramatic_analysis: str = ""
+    visual_notes: str = ""
+    emotion_tone: str = ""
     character_names: list[str] = Field(default_factory=list)
     dialogues: list[dict] = Field(default_factory=list)  # {character, text, emotion}
 
@@ -80,14 +85,20 @@ class ShotOut(ORMModel):
     shot_no: int
     scene: str
     description: str
+    image_prompt: str = ""
+    negative_prompt: str = ""
     motion_prompt: str
     duration: float
     camera_movement: str
     shot_size: str
+    dramatic_analysis: str = ""
+    visual_notes: str = ""
+    emotion_tone: str = ""
     status: str
     character_ids: list
     scene_id: int | None = None
     first_frame_asset_id: int | None = None
+    first_frame_image: str | None = None
     refs: list[ShotRefOut] = []
     dialogues: list[DialogueBrief] = []
 

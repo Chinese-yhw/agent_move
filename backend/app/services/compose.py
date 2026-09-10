@@ -1,11 +1,13 @@
 """FFmpeg 合成导出：镜头拼接 + 配音对齐 + 字幕烧录 + BGM。
 
-无 moviepy 依赖，直接 subprocess 调 ffmpeg（镜像里 apt 安装）。
+无 moviepy 依赖，直接 subprocess 调 ffmpeg。
+自动检测 imageio-ffmpeg 内置二进制（Windows 无系统 ffmpeg 时的兜底）。
 items 结构见 tasks/generation.compose_episode。
 """
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -14,6 +16,26 @@ from pathlib import Path
 from app.config import get_settings
 
 settings = get_settings()
+
+
+def _find_ffmpeg() -> tuple[str, str]:
+    """返回 (ffmpeg_path, ffprobe_path)。优先 imageio-ffmpeg，其次系统 PATH。"""
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe:
+            ffmpeg_bin = exe
+            probe = Path(exe).with_name("ffprobe.exe" if Path(exe).suffix else "ffprobe")
+            ffprobe_bin = str(probe) if probe.exists() else exe
+            return ffmpeg_bin, ffprobe_bin
+    except Exception:
+        pass
+    ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+    ffprobe = shutil.which("ffprobe") or "ffprobe"
+    return ffmpeg, ffprobe
+
+
+_FFMPEG_BIN, _FFPROBE_BIN = _find_ffmpeg()
 
 
 def _run(cmd: list[str]) -> None:
@@ -37,7 +59,7 @@ def export_episode(items: list[dict], bgm_path: str | None, burn_subtitle: bool)
         cursor = 0.0
         for i, it in enumerate(items):
             seg = td_path / f"seg_{i:03d}.mp4"
-            cmd = ["ffmpeg", "-y", "-i", str(it["video"])]
+            cmd = [_FFMPEG_BIN, "-y", "-i", str(it["video"])]
             for a in it["audios"]:
                 cmd += ["-i", str(a)]
             n_audio = len(it["audios"])
@@ -75,11 +97,11 @@ def export_episode(items: list[dict], bgm_path: str | None, burn_subtitle: bool)
             "\n".join(f"file '{f.as_posix()}'" for f in norm_files), encoding="utf-8"
         )
         merged = td_path / "merged.mp4"
-        _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
+        _run([_FFMPEG_BIN, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file),
               "-c", "copy", str(merged)])
 
         # 3) 字幕 + BGM
-        final_inputs = ["ffmpeg", "-y", "-i", str(merged)]
+        final_inputs = [_FFMPEG_BIN, "-y", "-i", str(merged)]
         filters = []
         chain = "[0:v]"
         if burn_subtitle and srt_events:
@@ -106,7 +128,7 @@ def export_episode(items: list[dict], bgm_path: str | None, burn_subtitle: bool)
 
 def _probe_duration(p: Path) -> float:
     r = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(p)],
+        [_FFPROBE_BIN, "-v", "quiet", "-print_format", "json", "-show_format", str(p)],
         capture_output=True, text=True,
     )
     return float(json.loads(r.stdout)["format"]["duration"])

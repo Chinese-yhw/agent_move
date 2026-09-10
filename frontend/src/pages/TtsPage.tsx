@@ -1,6 +1,6 @@
 /** 配音页：台词表 + 批量 TTS + 音频试听 */
 import { useEffect, useState } from 'react'
-import { genTts, listDialogues } from '../api'
+import { genTts, listDialogues, deleteDialogue } from '../api'
 import { ErrBox, ScriptSelector, TaskBar, useScriptId } from '../components'
 import { usePollTask } from '../usePollTask'
 import type { Dialogue } from '../types'
@@ -40,7 +40,7 @@ export default function TtsPage() {
 
       <table style={{ marginTop: 14 }}>
         <thead>
-          <tr><th>镜号</th><th>角色</th><th>台词</th><th>情绪</th><th style={{ width: 300 }}>音频</th></tr>
+          <tr><th>镜号</th><th>角色</th><th>台词</th><th>情绪</th><th style={{ width: 300 }}>音频</th><th>操作</th></tr>
         </thead>
         <tbody>
           {rows.map(d => (
@@ -50,9 +50,15 @@ export default function TtsPage() {
               <td>{d.text}</td>
               <td><span className="badge blue">{d.emotion}</span></td>
               <td>{d.audio_url ? <audio src={d.audio_url} controls /> : <span className="muted">未配音</span>}</td>
+              <td>
+                <button className="danger" onClick={async () => {
+                  if (!window.confirm('确定删除此台词？')) return
+                  try { await deleteDialogue(d.shot_id, d.id); refresh() } catch (e: any) { setError(e.message) }
+                }}>🗑</button>
+              </td>
             </tr>
           ))}
-          {rows.length === 0 && <tr><td colSpan={5} className="muted">暂无台词（先在剧本页提交含台词的分镜）</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={6} className="muted">暂无台词（先在剧本页提交含台词的分镜）</td></tr>}
         </tbody>
       </table>
     </div>

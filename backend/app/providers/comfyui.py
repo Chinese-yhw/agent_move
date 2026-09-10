@@ -107,11 +107,24 @@ class ComfyUIProvider:
     def generate_images(
         self, prompt: str, negative: str, count: int, width: int, height: int,
         reference_image: Path | None = None,
+        reference_images: list[Path] | None = None,
     ) -> list[Path]:
-        """文生图。reference_image 不为空时走 FaceID 工作流（角色一致性），否则走纯文生图。"""
+        """文生图。
+
+        reference_image: 单张参考图（旧 FaceID 路线，向后兼容）。
+        reference_images: 多张参考图（IP-Adapter 路线，角色+场景标准照一起喂）。
+        两者都不为空时优先走 FaceID/IP-Adapter 工作流，否则纯文生图。
+        """
+        # 合并参考图
+        ref_imgs: list[Path] = []
+        if reference_image:
+            ref_imgs.append(reference_image)
+        if reference_images:
+            ref_imgs.extend(reference_images)
+
         # 选择工作流模板
         faceid_template = getattr(settings, "comfyui_image_faceid_workflow", None)
-        use_faceid = reference_image is not None and bool(faceid_template)
+        use_faceid = len(ref_imgs) > 0 and bool(faceid_template)
         template_path = faceid_template if use_faceid else settings.comfyui_image_workflow
         wf = self._load_template(template_path)
 
@@ -119,14 +132,19 @@ class ComfyUIProvider:
         overrides: dict[str, dict] = {}
 
         if use_faceid:
-            # FaceID 路线：上传参考脸 → 注入 LoadImage 节点
-            img_name = self._upload_image(reference_image)
+            # FaceID/IP-Adapter 路线：上传参考图 → 注入 LoadImage 节点
+            uploaded_names = [self._upload_image(r) for r in ref_imgs]
+            loadimage_nodes = [nid for nid, n in wf.items()
+                               if n.get("class_type") == "LoadImage"]
+            # 按顺序分配参考图到 LoadImage 节点（多了的循环复用第一张）
+            for i, nid in enumerate(loadimage_nodes):
+                img_name = uploaded_names[i % len(uploaded_names)]
+                overrides[nid] = {"image": img_name}
             for node_id, node in wf.items():
                 cls = node.get("class_type", "")
                 inputs = node.setdefault("inputs", {})
                 if cls == "LoadImage":
-                    # 所有 LoadImage 都注入参考脸（FaceID 工作流里通常只有 1 个）
-                    overrides[node_id] = {"image": img_name}
+                    pass  # 已在上面处理
                 elif cls in ("EmptySD3LatentImage", "EmptyLatentImage"):
                     overrides[node_id] = {"width": width, "height": height, "batch_size": count}
                 elif cls in ("KSampler", "KSamplerAdvanced"):
@@ -137,7 +155,7 @@ class ComfyUIProvider:
                         overrides[node_id] = {"text": negative}
                     else:
                         overrides[node_id] = {"text": prompt}
-            logger.info("generate_images: FaceID workflow, ref=%s", img_name)
+            logger.info("generate_images: FaceID/IP-Adapter workflow, refs=%s", uploaded_names)
         else:
             # 纯文生图路线（Z-Image / SDXL Basic 通用）
             clip_ids = []

@@ -66,22 +66,30 @@ class Project(Base):
     status: Mapped[str] = mapped_column(String(16), default="进行中")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
-    scripts: Mapped[list["Script"]] = relationship(back_populates="project")
-    assets: Mapped[list["Asset"]] = relationship(back_populates="project")
+    scripts: Mapped[list["Script"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan",
+    )
+    assets: Mapped[list["Asset"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan",
+    )
 
 
 class Script(Base):
     __tablename__ = "scripts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
     chapter: Mapped[int] = mapped_column(Integer, default=1)      # 集数/章节
     title: Mapped[str] = mapped_column(String(128), default="")
     content: Mapped[str] = mapped_column(Text, default="")        # 剧本文本
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     project: Mapped[Project] = relationship(back_populates="scripts")
-    shots: Mapped[list["StoryboardShot"]] = relationship(back_populates="script")
+    shots: Mapped[list["StoryboardShot"]] = relationship(
+        back_populates="script", cascade="all, delete-orphan",
+    )
 
 
 class Asset(Base):
@@ -89,7 +97,9 @@ class Asset(Base):
     __tablename__ = "assets"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
     type: Mapped[str] = mapped_column(String(16))                 # character/scene/prop
     name: Mapped[str] = mapped_column(String(128))
     description: Mapped[str] = mapped_column(Text, default="")
@@ -100,14 +110,21 @@ class Asset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     project: Mapped[Project] = relationship(back_populates="assets")
-    candidates: Mapped[list["ImageCandidate"]] = relationship(back_populates="asset")
+    candidates: Mapped[list["ImageCandidate"]] = relationship(
+        back_populates="asset", cascade="all, delete-orphan",
+    )
 
 
 class ImageCandidate(Base):
     __tablename__ = "image_candidates"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id"))
+    asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=True,
+    )
+    shot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("storyboard_shots.id", ondelete="CASCADE"), nullable=True,
+    )
     image_url: Mapped[str] = mapped_column(String(512))
     prompt: Mapped[str] = mapped_column(Text, default="")
     seed: Mapped[int] = mapped_column(Integer, default=0)
@@ -122,32 +139,47 @@ class StoryboardShot(Base):
     __tablename__ = "storyboard_shots"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    script_id: Mapped[int] = mapped_column(ForeignKey("scripts.id"))
+    script_id: Mapped[int] = mapped_column(
+        ForeignKey("scripts.id", ondelete="CASCADE"),
+    )
     shot_no: Mapped[int] = mapped_column(Integer)                 # 镜号
     scene: Mapped[str] = mapped_column(String(128), default="")   # 场景名
     description: Mapped[str] = mapped_column(Text, default="")    # 画面描述
+    image_prompt: Mapped[str] = mapped_column(Text, default="")   # 文生图正提示词（从 CSV 导入）
+    negative_prompt: Mapped[str] = mapped_column(Text, default="") # 文生图负提示词（从 CSV 导入）
     motion_prompt: Mapped[str] = mapped_column(Text, default="")  # 动作/运镜提示词（视频用）
     duration: Mapped[float] = mapped_column(Float, default=5.0)   # 秒
     camera_movement: Mapped[str] = mapped_column(String(64), default="")
     shot_size: Mapped[str] = mapped_column(String(32), default="")  # 景别
+    dramatic_analysis: Mapped[str] = mapped_column(Text, default="")
+    visual_notes: Mapped[str] = mapped_column(Text, default="")
+    emotion_tone: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[ShotStatus] = mapped_column(Enum(ShotStatus), default=ShotStatus.pending)
     character_ids: Mapped[list] = mapped_column(JSON, default=list)
-    scene_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id"), nullable=True)
-    # 手动指定的首帧素材；为空时按「第一个有标准照的角色 → 场景」自动选取
-    first_frame_asset_id: Mapped[int | None] = mapped_column(
-        ForeignKey("assets.id"), nullable=True
+    scene_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True,
     )
+    first_frame_asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True,
+    )
+    first_frame_image: Mapped[str | None] = mapped_column(String(512), nullable=True)  # 镜头专属首帧图（image_prompt 生成）
 
     script: Mapped[Script] = relationship(back_populates="shots")
-    candidates: Mapped[list["VideoCandidate"]] = relationship(back_populates="shot")
-    dialogues: Mapped[list["Dialogue"]] = relationship(back_populates="shot")
+    candidates: Mapped[list["VideoCandidate"]] = relationship(
+        back_populates="shot", cascade="all, delete-orphan",
+    )
+    dialogues: Mapped[list["Dialogue"]] = relationship(
+        back_populates="shot", cascade="all, delete-orphan",
+    )
 
 
 class VideoCandidate(Base):
     __tablename__ = "video_candidates"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    shot_id: Mapped[int] = mapped_column(ForeignKey("storyboard_shots.id"))
+    shot_id: Mapped[int] = mapped_column(
+        ForeignKey("storyboard_shots.id", ondelete="CASCADE"),
+    )
     video_url: Mapped[str] = mapped_column(String(512))
     duration: Mapped[float] = mapped_column(Float, default=5.0)
     model: Mapped[str] = mapped_column(String(64), default="wan2.1-i2v")
@@ -165,8 +197,12 @@ class Dialogue(Base):
     __tablename__ = "dialogues"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    shot_id: Mapped[int] = mapped_column(ForeignKey("storyboard_shots.id"))
-    character_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id"), nullable=True)
+    shot_id: Mapped[int] = mapped_column(
+        ForeignKey("storyboard_shots.id", ondelete="CASCADE"),
+    )
+    character_id: Mapped[int | None] = mapped_column(
+        ForeignKey("assets.id", ondelete="SET NULL"), nullable=True,
+    )
     speaker_name: Mapped[str] = mapped_column(String(32), default="")  # 导入时原文角色名（如"长老""字幕"），素材后建时用于回填 character_id
     text: Mapped[str] = mapped_column(Text)
     emotion: Mapped[str] = mapped_column(String(32), default="平静")

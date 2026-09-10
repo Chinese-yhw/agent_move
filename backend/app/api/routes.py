@@ -21,7 +21,7 @@ from app.schemas import (
     TtsGenerateReq, AssetOut, AssetUpdate, SelectCandidateReq, TaskOut,
 )
 from app.tasks.generation import (
-    compose_episode, generate_dialogue_audios, generate_shot_videos,
+    compose_episode, generate_dialogue_audios, generate_shot_videos, generate_shot_images,
     generate_standard_images,
 )
 
@@ -156,6 +156,39 @@ async def delete_script(script_id: int, db: AsyncSession = Depends(get_db)):
     return {"ok": True}
 
 
+@router.delete("/assets/{asset_id}")
+async def delete_asset(asset_id: int, db: AsyncSession = Depends(get_db)):
+    """删除素材及其候选图。引用该素材的镜头 scene_id / first_frame_asset_id 自动置 NULL。"""
+    a = await db.get(Asset, asset_id)
+    if not a:
+        raise HTTPException(404, "素材不存在")
+    await db.delete(a)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/shots/{shot_id}")
+async def delete_shot(shot_id: int, db: AsyncSession = Depends(get_db)):
+    """删除镜头及其全部候选视频和台词。"""
+    s = await db.get(StoryboardShot, shot_id)
+    if not s:
+        raise HTTPException(404, "镜头不存在")
+    await db.delete(s)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/shots/{shot_id}/dialogues/{dialogue_id}")
+async def delete_dialogue(shot_id: int, dialogue_id: int, db: AsyncSession = Depends(get_db)):
+    """删除某条台词。"""
+    d = await db.get(Dialogue, dialogue_id)
+    if not d or d.shot_id != shot_id:
+        raise HTTPException(404, "台词不存在")
+    await db.delete(d)
+    await db.commit()
+    return {"ok": True}
+
+
 def _resolve_first_frame_id(shot: StoryboardShot, assets: dict[int, Asset]) -> int | None:
     """首帧素材 ID：手动指定 > 第一个有标准照的角色 > 场景。与 worker 逻辑保持一致。"""
     candidate_ids: list = []
@@ -251,9 +284,15 @@ async def import_shots(script_id: int, req: ShotsImport, db: AsyncSession = Depe
     for sh in req.shots:
         shot = StoryboardShot(
             script_id=script_id, shot_no=sh.shot_no, scene=sh.scene,
-            description=sh.description, motion_prompt=sh.motion_prompt,
+            description=sh.description,
+            image_prompt=sh.image_prompt,
+            negative_prompt=sh.negative_prompt,
+            motion_prompt=sh.motion_prompt,
             duration=sh.duration, camera_movement=sh.camera_movement,
             shot_size=sh.shot_size,
+            dramatic_analysis=sh.dramatic_analysis,
+            visual_notes=sh.visual_notes,
+            emotion_tone=sh.emotion_tone,
             character_ids=[name_to_id[n] for n in sh.character_names if n in name_to_id],
             scene_id=scene_name_to_id.get(sh.scene),
         )
@@ -325,22 +364,150 @@ def _coerce_shot(x: dict) -> ShotIn:
 @router.post("/scripts/{script_id}/shots/upload")
 async def upload_storyboard_txt(script_id: int, file: UploadFile = File(...),
                                 replace: bool = Form(True), db: AsyncSession = Depends(get_db)):
-    """上传分镜表 txt（DeepSeek 格式：Tab 分隔，含表头）直接导入。"""
-    from app.services.importers import parse_storyboard_table
+    """上传分镜表：自动识别格式——Tab/Markdown 表格 或 段落式 Markdown 分镜拆解。"""
+    from app.services.importers import (
+        parse_storyboard_table, parse_storyboard_md, looks_like_md_paragraph,
+    )
     raw = await file.read()
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = raw.decode("gbk", errors="ignore")
-    shots = parse_storyboard_table(text)
+
+    shots: list[dict] = []
+    fmt = ""
+    if looks_like_md_paragraph(text):
+        shots = parse_storyboard_md(text)
+        fmt = "段落式 Markdown 分镜拆解"
+    else:
+        shots = parse_storyboard_table(text)
+        fmt = "表格"
+
     if not shots:
-        raise HTTPException(400, "未解析出任何分镜行，请确认文件为 Tab 分隔的表格文本")
+        shots = parse_storyboard_md(text)
+        if shots:
+            fmt = "段落式 Markdown 分镜拆解（自动回退）"
+
+    if not shots:
+        raise HTTPException(
+            400,
+            "未解析出任何分镜行。支持格式：\n"
+            "  · 表格：Tab 分隔 / Markdown 表格 / 2+ 空格分隔，含「镜号」表头\n"
+            "  · 段落 MD：**镜N｜时长 描述** + **剧作目的** / **情感基调** / **视觉风格** / **运镜理由**"
+        )
     payload = ShotsImport(shots=[ShotIn(**s) for s in shots])
     if replace:
         created = await replace_shots(script_id, payload, db)
     else:
         created = await import_shots(script_id, payload, db)
-    return {"created": len(created)}
+    return {"created": len(created), "format": fmt}
+
+
+@router.post("/scripts/{script_id}/shots/upload-csv")
+async def upload_csv_prompts(script_id: int, file: UploadFile = File(...),
+                             create_assets: bool = Form(True),
+                             db: AsyncSession = Depends(get_db)):
+    """上传 CSV 提示词表（2.csv 格式）。
+
+    功能：
+    1. 解析 CSV 中的正面/负面 prompt，覆盖到该剧本已有镜头的 image_prompt / negative_prompt
+       （如果镜头还没创建，会自动按镜号新建）
+    2. 可选：从 prompt 中自动提取角色/场景/道具描述，创建简化素材表（用于标准照生成）
+    """
+    from app.services.importers import parse_csv_shots, extract_assets_from_shots
+
+    script = await db.get(Script, script_id)
+    if not script:
+        raise HTTPException(404, "剧本不存在")
+    project_id = script.project_id
+
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("gbk", errors="ignore")
+
+    csv_shots = parse_csv_shots(text)
+    if not csv_shots:
+        raise HTTPException(400, "CSV 中未解析出任何镜头。请检查列名是否为「镜号, 正面 Prompt, 负面 Prompt」")
+
+    existing_shots = (await db.execute(
+        select(StoryboardShot).where(StoryboardShot.script_id == script_id)
+    )).scalars().all()
+    shot_by_no = {s.shot_no: s for s in existing_shots}
+
+    updated = 0
+    created = 0
+    for cs in csv_shots:
+        if cs["shot_no"] in shot_by_no:
+            sh = shot_by_no[cs["shot_no"]]
+            sh.image_prompt = cs["image_prompt"]
+            sh.negative_prompt = cs["negative_prompt"]
+            if cs.get("description"):
+                sh.description = cs["description"]
+            updated += 1
+        else:
+            sh = StoryboardShot(
+                script_id=script_id,
+                shot_no=cs["shot_no"],
+                description=cs.get("description", ""),
+                image_prompt=cs["image_prompt"],
+                negative_prompt=cs["negative_prompt"],
+                motion_prompt="",
+                duration=cs.get("duration", 5.0),
+            )
+            db.add(sh)
+            created += 1
+
+    asset_count = 0
+    if create_assets:
+        extracted = extract_assets_from_shots(csv_shots)
+        existing_assets = (await db.execute(
+            select(Asset).where(Asset.project_id == project_id)
+        )).scalars().all()
+        existing_names = {a.name: a for a in existing_assets}
+
+        for ea in extracted:
+            if ea["name"] in existing_names:
+                a = existing_names[ea["name"]]
+                if not a.description or len(a.description) < len(ea["description"]):
+                    a.description = ea["description"]
+            else:
+                db.add(Asset(
+                    project_id=project_id,
+                    type=ea["type"],
+                    name=ea["name"],
+                    description=ea["description"],
+                ))
+                asset_count += 1
+
+    await db.commit()
+
+    updated_all = (await db.execute(
+        select(StoryboardShot).where(StoryboardShot.script_id == script_id)
+    )).scalars().all()
+    name_to_asset = {}
+    all_assets = (await db.execute(
+        select(Asset).where(Asset.project_id == project_id)
+    )).scalars().all()
+    for a in all_assets:
+        name_to_asset[a.name] = a
+
+    for sh in updated_all:
+        desc_blob = (sh.image_prompt or sh.description or "")
+        char_ids = []
+        for aname, aobj in name_to_asset.items():
+            if aobj.type == "character" and aname in desc_blob:
+                char_ids.append(aobj.id)
+        sh.character_ids = char_ids
+
+    await db.commit()
+    return {
+        "shots_parsed": len(csv_shots),
+        "shots_updated": updated,
+        "shots_created": created,
+        "assets_created": asset_count,
+    }
 
 
 @router.post("/projects/{project_id}/assets/upload")
@@ -555,8 +722,29 @@ async def extract_assets(script_id: int, db: AsyncSession = Depends(get_db)):
 
 # ---------- 素材与标准照 ----------
 @router.get("/projects/{project_id}/assets", response_model=list[AssetOut])
-async def list_assets(project_id: int, db: AsyncSession = Depends(get_db)):
-    rows = await db.execute(select(Asset).where(Asset.project_id == project_id))
+async def list_assets(
+    project_id: int,
+    script_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    query = select(Asset).where(Asset.project_id == project_id)
+    if script_id is not None:
+        shot_rows = await db.execute(
+            select(StoryboardShot).where(StoryboardShot.script_id == script_id)
+        )
+        shots = shot_rows.scalars().all()
+        refs: set[int] = set()
+        for shot in shots:
+            if shot.scene_id:
+                refs.add(shot.scene_id)
+            if shot.first_frame_asset_id:
+                refs.add(shot.first_frame_asset_id)
+            for cid in (shot.character_ids or []):
+                refs.add(cid)
+        if not refs:
+            return []
+        query = query.where(Asset.id.in_(refs))
+    rows = await db.execute(query)
     return rows.scalars().all()
 
 
@@ -646,14 +834,65 @@ async def select_standard_image(asset_id: int, req: SelectCandidateReq,
     return {"ok": True, "standard_image": c.image_url}
 
 
-# ---------- 镜头视频 ----------
+# ---------- 镜头首帧图 + 视频 ----------
+@router.post("/shots/{shot_id}/images", response_model=TaskOut)
+async def gen_shot_images(shot_id: int, req: GenerateImagesReq, db: AsyncSession = Depends(get_db)):
+    """镜头首帧图抽卡：用 image_prompt + negative_prompt 生成，IP-Adapter 参考角色/场景标准照。"""
+    s = await db.get(StoryboardShot, shot_id)
+    if not s:
+        raise HTTPException(404)
+    if not s.image_prompt and not s.description:
+        raise HTTPException(400, "该镜头没有 image_prompt，请先上传 CSV 提示词表")
+    t = Task(type=TaskType.image, ref_id=shot_id)
+    db.add(t)
+    await db.commit()
+    await db.refresh(t)
+    r = generate_shot_images.delay(t.id, shot_id, req.n_candidates, req.width, req.height)
+    t.celery_id = r.id
+    await db.commit()
+    return t
+
+
+@router.get("/shots/{shot_id}/images")
+async def list_shot_image_candidates(shot_id: int, db: AsyncSession = Depends(get_db)):
+    """查镜头首帧图候选。"""
+    rows = await db.execute(
+        select(ImageCandidate).where(ImageCandidate.shot_id == shot_id)
+        .order_by(ImageCandidate.id.desc())
+    )
+    return [{"id": c.id, "image_url": c.image_url, "prompt": c.prompt,
+             "is_selected": c.is_selected} for c in rows.scalars().all()]
+
+
+@router.post("/shots/{shot_id}/images/{cid}/select")
+async def select_shot_image(shot_id: int, cid: int, db: AsyncSession = Depends(get_db)):
+    """选定镜头首帧图（设为 first_frame_image + is_selected）。"""
+    c = await db.get(ImageCandidate, cid)
+    if not c or c.shot_id != shot_id:
+        raise HTTPException(404, "候选图不存在")
+    # 取消其他选中
+    rows = await db.execute(
+        select(ImageCandidate).where(
+            ImageCandidate.shot_id == shot_id, ImageCandidate.is_selected.is_(True)
+        )
+    )
+    for prev in rows.scalars().all():
+        prev.is_selected = False
+    c.is_selected = True
+    s = await db.get(StoryboardShot, shot_id)
+    if s:
+        s.first_frame_image = c.image_url
+    await db.commit()
+    return {"ok": True, "first_frame_image": c.image_url}
+
+
 @router.post("/shots/{shot_id}/videos", response_model=TaskOut)
 async def gen_video(shot_id: int, req: GenerateVideoReq, db: AsyncSession = Depends(get_db)):
     s = await db.get(StoryboardShot, shot_id)
     if not s:
         raise HTTPException(404)
-    # T2V 模式跳过首帧校验
-    if not req.force_t2v:
+    # T2V 模式跳过首帧校验；有镜头专属首帧图也可跳过素材校验
+    if not req.force_t2v and not s.first_frame_image:
         script = await db.get(Script, s.script_id)
         asset_rows = await db.execute(
             select(Asset).where(Asset.project_id == script.project_id)
@@ -749,7 +988,7 @@ async def list_dialogues(script_id: int, db: AsyncSession = Depends(get_db)):
         .order_by(StoryboardShot.shot_no, Dialogue.id)
     )
     return [{
-        "id": d.id, "shot_no": shot_no, "character_id": d.character_id,
+        "id": d.id, "shot_id": d.shot_id, "shot_no": shot_no, "character_id": d.character_id,
         "speaker_name": d.speaker_name or "",
         "text": d.text, "emotion": d.emotion, "voice_id": d.voice_id,
         "audio_url": d.audio_url,

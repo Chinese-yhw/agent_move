@@ -2,22 +2,30 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { cancelTask, deleteImageCandidate, genImages, listAssets, listImageCandidates, selectStandard, uploadReferenceImage } from '../api'
-import { ErrBox, Lightbox, TaskBar } from '../components'
+import { ErrBox, Lightbox, ScriptSelector, TaskBar, useScriptId } from '../components'
 import { usePollTask } from '../usePollTask'
 import type { Asset, ImageCandidate } from '../types'
 
 export default function ImagesPage() {
   const projectId = Number(useParams().id)
+  const scriptId = useScriptId()
   const [assets, setAssets] = useState<Asset[]>([])
   const [error, setError] = useState<string | null>(null)
 
-  const refresh = () => listAssets(projectId).then(setAssets).catch(e => setError(e.message))
-  useEffect(() => { refresh() }, [projectId])
+  const refresh = () => listAssets(projectId, scriptId).then(setAssets).catch(e => setError(e.message))
+  useEffect(() => { refresh() }, [projectId, scriptId])
 
   return (
     <div>
-      <div className="page-head"><h2>🖼 标准照抽卡</h2></div>
-      {assets.length === 0 && <p className="muted">暂无素材，请先在「素材」页执行提取。</p>}
+      <div className="page-head">
+        <h2>🖼 标准照抽卡</h2>
+        <ScriptSelector />
+      </div>
+      {assets.length === 0 && (
+        <p className="muted">
+          {scriptId ? '当前剧本还没有关联的素材，请先在「素材」页执行提取或上传清单。' : '暂无素材，请先在「素材」页执行提取，或在右上角选择剧本后再查看。'}
+        </p>
+      )}
       <ErrBox error={error} />
 
       <div className="masonry">

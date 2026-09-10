@@ -168,6 +168,76 @@ def generate_standard_images(self, task_id: int, asset_id: int, n: int, width: i
 
 
 @celery_app.task(bind=True, max_retries=1, default_retry_delay=60, on_failure=_on_failure)
+def generate_shot_images(self, task_id: int, shot_id: int, n: int, width: int, height: int):
+    """镜头首帧图抽卡：用 CSV 导入的 image_prompt + negative_prompt 生成专属首帧。
+
+    IP-Adapter 参考：该镜头关联角色/场景的标准照（已锁定的），保证人物长相和场景风格一致。
+    生成后存入 shot.first_frame_image（最后一次生成的 URL）+ ImageCandidate 记录。
+    """
+    from pathlib import Path as PPath
+    with SyncSession() as db:
+        shot = db.get(StoryboardShot, shot_id)
+        if not shot:
+            _mark(task_id, TaskStatus.failed, error=f"镜头 id={shot_id} 不存在")
+            return
+        script = db.get(Script, shot.script_id)
+        project = db.get(Project, script.project_id) if script else None
+        style = project.style if project else "电影感"
+
+        # CSV 导入的 prompt 优先，没有就退回 description
+        prompt = shot.image_prompt or shot.description
+        if not prompt:
+            _mark(task_id, TaskStatus.failed, error="该镜头没有 image_prompt 也没有 description，无法生图")
+            return
+        full_prompt = f"{style}，{prompt}"
+        negative = shot.negative_prompt or "低质量，模糊，变形，多余肢体，水印，文字，最差质量"
+        logger.info("generate_shot_images: shot=%s, prompt=%s", shot.shot_no, full_prompt[:100])
+
+        # 收集 IP-Adapter 参考图：关联角色的标准照 + 场景标准照
+        ref_images: list[PPath] = []
+        for cid in (shot.character_ids or []):
+            a = db.get(Asset, cid)
+            if a and a.standard_image:
+                p = PPath(_url_to_path(a.standard_image))
+                if p.exists():
+                    ref_images.append(p)
+        if shot.scene_id:
+            a = db.get(Asset, shot.scene_id)
+            if a and a.standard_image:
+                p = PPath(_url_to_path(a.standard_image))
+                if p.exists():
+                    ref_images.append(p)
+
+    start = time.time()
+    try:
+        provider = ComfyUIProvider()
+        with _Heartbeat(task_id, eta_seconds=n * 25):
+            images = provider.generate_images(
+                full_prompt, negative, n, width, height,
+                reference_images=ref_images if ref_images else None,
+            )
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+    cost = _gpu_cost(time.time() - start)
+    with SyncSession() as db:
+        urls = []
+        for img in images:
+            c = ImageCandidate(
+                shot_id=shot_id, image_url=_media_url(img), prompt=full_prompt,
+                seed=int(time.time()) % 2**31, model="comfyui-shot-image",
+            )
+            db.add(c)
+            urls.append(c.image_url)
+        # 最后一张作为镜头专属首帧
+        shot = db.get(StoryboardShot, shot_id)
+        if shot and urls:
+            shot.first_frame_image = urls[-1]
+        db.commit()
+        _mark(task_id, TaskStatus.success, {"candidates": urls}, cost=cost)
+
+
+@celery_app.task(bind=True, max_retries=1, default_retry_delay=60, on_failure=_on_failure)
 def generate_shot_videos(self, task_id: int, shot_id: int, n: int, force_t2v: bool = False):
     """镜头视频抽卡：自动判断 I2V（有首帧）或 T2V（无首帧/特效镜头）。
     提示词清洗：剥离"字幕/文字/字体/台词"等视频模型渲染不了的内容，
@@ -175,37 +245,35 @@ def generate_shot_videos(self, task_id: int, shot_id: int, n: int, force_t2v: bo
     with SyncSession() as db:
         shot = db.get(StoryboardShot, shot_id)
         first_frame_local = _pick_first_frame(db, shot)
-        motion = shot.motion_prompt or translate_motion_prompt(shot.description, shot.camera_movement)
+        primary_prompt = shot.image_prompt or shot.description
+        negative_prompt = shot.negative_prompt or ""
+        motion = shot.motion_prompt or translate_motion_prompt(primary_prompt, shot.camera_movement)
         if not shot.motion_prompt:
             shot.motion_prompt = motion
         shot.status = ShotStatus.running
         duration = shot.duration
 
-        # ---- 字幕/文字/字体/台词剥离：视频模型渲染不了，必须去掉 ----
         import re as _re
-        # 先删引号里的文字（字幕内容），再删"字幕：xxx"这种结构
-        cleaned_prompt = shot.description
-        # 删除「"xxx"」「"xxx"」引号内容
+        cleaned_prompt = primary_prompt
         cleaned_prompt = _re.sub(r'[""][^""\n]{1,60}[""]', '', cleaned_prompt)
-        # 删除「字幕：xxx」「字幕浮现：xxx」「文字：xxx」等
         for pat in [
             r'[，,]?\s*字幕[^，。！？\n]{0,20}[：:][^。！？\n]*',
             r'[，,]?\s*(?:文字|字体|画外音|旁白|台词)[^，。！？\n]{0,10}[：:][^。！？\n]*',
         ]:
             cleaned_prompt = _re.sub(pat, '', cleaned_prompt)
-        # 删关键词
         for kw in ['字幕缓慢浮现', '字幕浮现', '字幕显示', '字幕', '字体', '台词', '文字', '旁白', '画外音']:
             cleaned_prompt = cleaned_prompt.replace(kw, '')
-        # 删残留标点
         cleaned_prompt = _re.sub(r'[，,。]{2,}', '。', cleaned_prompt).strip('，,。 ：:')
-        # 用清洗后的描述重新生成 motion_prompt
         shot.motion_prompt = translate_motion_prompt(cleaned_prompt, shot.camera_movement)
         db.commit()
 
     use_t2v = force_t2v or first_frame_local is None or not first_frame_local.exists()
 
-    negative = ("low quality, blurry, distorted face, deformed hands, watermark, text, "
-                "static image, no motion, flickering, changing face, different person")
+    video_negative = ("low quality, blurry, distorted face, deformed hands, watermark, text, "
+                      "static image, no motion, flickering, changing face, different person")
+    if negative_prompt:
+        video_negative = f"{negative_prompt}, {video_negative}"
+    negative = video_negative
     start = time.time()
     try:
         provider = ComfyUIProvider()
@@ -303,7 +371,14 @@ def compose_episode(self, task_id: int, script_id: int, bgm_path: str | None, bu
 
 
 def _pick_first_frame(db: Session, shot: StoryboardShot) -> Path | None:
-    """统一首帧选取：手动指定 > 第一个有标准照的关联角色 > 场景标准照。"""
+    """统一首帧选取：镜头专属首帧图 > 手动指定素材标准照 > 关联角色标准照 > 场景标准照。"""
+    # 1. 镜头专属首帧图（CSV image_prompt 生成的）
+    if shot.first_frame_image:
+        p = _url_to_path(shot.first_frame_image)
+        if p.exists():
+            return p
+
+    # 2. 从素材标准照中选
     candidate_ids: list = []
     if shot.first_frame_asset_id:
         candidate_ids.append(shot.first_frame_asset_id)
