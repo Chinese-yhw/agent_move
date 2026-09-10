@@ -1,0 +1,841 @@
+dev环境47.93.28.142  csp
+test环境39.105.5.252   csp_django
+
+二次需求需要的包
+1.安装libreoffice
+
+sudo apt update
+sudo apt install libreoffice
+
+
+.\.venv\Scripts\celery -A app.tasks.celery_app.celery_app worker --loglevel=info --pool=solo
+需要把字体弄到user/local/share/font
+
+2.pip install pypinyin   获取首字母的库，版本为0.53.0
+
+pip install 包名 -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+
+celery -A server worker --loglevel=info --pool=threads -Q long_tasks
+
+unvicorn启动
+server.asgi:application --host 0.0.0.0 --port 8000
+
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+FastAPI启动
+
+app.main:app --reload --port 8084
+
+windows查看端口占用
+
+netstat -ano | findstr :8000
+  TCP    0.0.0.0:8000           0.0.0.0:0              LISTENING       18140
+
+tasklist | findstr 18140
+python.exe                   18140 Console                    1    505,156 K
+
+taskkill /pid 18140 /f
+成功: 已终止 PID 为 18140 的进程。
+
+git令牌
+pt-B0gQsh5zEycbsITKJxGTvAvq_58c5694a-ffdf-4fdf-9c6e-1c9dc8780262
+
+
+git status 
+git branch dev
+git add .
+git commit -m ""
+git push origin dev
+
+
+
+git status
+# 2. 删除文件/文件夹
+git rm -r Src/auth_center/要删除的文件夹名
+
+# 3. 提交删除
+git commit -m "删除文件/文件夹"
+
+# 4. 推送到远程（如果需要）
+git push origin dev
+
+1.以root身份进入es
+docker cp "/home/lthpc/egpt_dev/elasticsearch-analysis-ik-8.11.0 (1).zip" egpt-es:/tmp/ik.zip   拷贝	
+docker exec -u root -it egpt-es /bin/bash
+/usr/share/elasticsearch/bin/elasticsearch-plugin install file:///tmp/ik.zip
+exit
+docker restart egpt-es
+
+阿里源
+pip install alibabacloud_imm20200930 -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+
+
+pip freeze>requirements.txt
+
+自己修改脚本中的#!/bin/bash
+dos2unix /path/to/your/script.sh
+
+systemd 服务
+在 /etc/systemd/system 目录中建立 svc_name.service 文件
+
+[Unit]
+Description=CSP WEB
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStart=/home/csp/cspproject/server/start.sh    #项目路径
+[Install]
+WantedBy=multi-user.target
+
+
+安装日语分词器
+./bin/elasticsearch-plugin install analysis-kuromoji
+
+256598@qq.com
+运行start.sh
+./start.sh
+
+查看conda
+whereis conda
+
+查看bashrc中配置的路径
+cat ~/.bashrc
+
+编辑过 .service 文件后：
+systemctl daemon-reload
+
+systemctl start svc_name #启动服务  restart stop
+journalctl -u svc_name #查看服务日志 stdout/stderr
+
+将服务设为自动启动
+systemctl enable svc_name
+
+查看状态
+systemctl status csp-beat
+
+#关闭服务
+systemctl stop csp
+systemctl start csp
+
+查看日志
+journalctl -u csp -f
+
+# 查看全部日志（不分页）
+journalctl -u csp --no-pager
+
+# 查看最近 1 小时日志
+journalctl -u csp --no-pager --since "1 hour ago"
+
+# 查看并搜索错误
+journalctl -u csp --no-pager | grep -i error
+
+# 导出日志
+journalctl -u csp --no-pager --all > /home/csp/csp_logs.txt
+
+查看所有的控制台日志
+journalctl -u csp | less
+
+
+查看linux发行版本命令
+cat /etc/issue
+
+ echo $PATH
+/home/csp/miniconda3/envs/csp_django/bin:/home/csp/miniconda3/condabin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+
+
+查看python进程
+ps -ef | grep python
+
+
+cat ~/.bashrc ^C
+
+
+
+查看日志
+tail -f error-2024-12-09.log
+
+配置celery时，需要在etc/systmed/system下分别创建一个beat 和worker的service文件， ExecStart后面就是你项目中celery的位置
+[Unit]
+Description=CSP Task Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStart=/root/csp/csp/start-worker.sh
+
+[Install]
+WantedBy=multi-user.target
+
+这个配置完成之后，在项目目录下，分别建立start-beat.sh 和start-worker.sh
+
+
+#如beat起不来，可以删除缓存，在删除beat文件
+find /home/lthpc/egpt_qa/egpt -name "__pycache__" -exec rm -rf {} +
+find /home/lthpc/egpt_qa/egpt -name "*.pyc" -delete
+
+
+
+#!/bin/bash
+export PATH="/root/miniconda3/envs/csp/bin:/root/miniconda3/bin:$PATH" #虚拟环境加conda环境
+cd /root/csp/csp
+
+celery -A server beat --loglevel=info
+celery -A server worker --loglevel=info --pool=eventlet
+
+数据库自增问题
+SELECT setval('public.user_id_seq', 2, true);
+SELECT setval('public.user_role_id_seq', 2, true);
+
+
+
+如果在执行python manage.py 时报错，那么就是少包了，去django包中的init中把raise报错  换成下面这句话，能看到错误
+#self.app_configs = {}
+
+客户生产环境导入数据操作流程
+1.su - csp  切换用户
+2.conda activate csp   切换环境
+3.cd 目录
+4.sudo /home/csp/miniconda3/envs/csp/bin/python auto_upload_material.py   指定环境python路径
+
+
+
+-T 选项可以显示文件系统的类型，帮助你了解每个分区使用的文件系统类型。
+df -Th
+
+df 命令可以显示所有挂载点的磁盘使用情况，-h 选项以人类可读的格式显示。
+df -h
+
+
+tar -zcvf 路径
+
+unzip  压缩包名   #解压到当前目录
+
+unzip -O utf-8 filename.zip
+
+修改服务器时间：
+sudo date 050814302025   更改子集想要的时间：月日时分年
+
+恢复时间：
+timedatectl status   检查当前的时间同步
+sudo timedatectl set-ntp false 
+sudo timedatectl set-ntp true
+
+
+celery -A server worker --loglevel=info --pool=eventlet
+celery -A server beat --loglevel=info
+
+查看同义词组
+curl -X GET "http://localhost:9200/_synonyms/global_multilingual_synonyms"
+
+docker exec -u 0 -it es-container bash    以root身份进入es
+/usr/share/elasticsearch/bin/elasticsearch-plugin list  查看当前es容器中的分词器
+
+
+bin/elasticsearch-plugin install analysis-kuromoji
+bin/elasticsearch-plugin install analysis-ik
+
+上传文件是用异步写的，当同时操作这个文件新增和修改时，异步任务会不会混乱
+
+我已经用了celery了，场景就是不是负载均衡以后，一共两个服务器，起一个beat，然后两台服务器都起worker，异步任务在操作同一个文件时，会不会混乱
+
+负载均衡的nginx
+
+      server {
+                 listen 80;
+                 listen [::]:80;
+                 server_name cspapi.canon-ie.com.cn;
+                 #return 301 https://$host$request_uri;
+                 location /slb-check {
+                        return 200;
+                }
+                #return 301 https://$host$request_uri;
+                location / {
+
+                proxy_set_header        Host $host;
+                proxy_set_header        X-Real-IP $remote_addr;
+                proxy_set_header        X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header        X-Forwarded-Pro $scheme;
+
+                proxy_pass          http://localhost:8000;
+
+                }
+                #error_page 502 /502.html;
+                #location = /502.html {
+                #       root /usr/share/nginx/html;
+                #       internal;
+                #       }
+        }
+
+
+
+server { # For mgpt-v2
+                listen 443 ssl;
+                server_name cspapi.cib-biz.com;
+                client_max_body_size 500M;
+
+                ssl_certificate           /root/csp/cert/_.cib-biz.com.crt;
+                ssl_certificate_key       /root/csp/cert/_.cib-biz.com.key;
+
+                location / {
+                proxy_set_header        Host $host;
+                proxy_set_header        X-Real-IP $remote_addr;
+                proxy_set_header        X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header        X-Forwarded-Proto $scheme;
+
+                proxy_pass          http://localhost:8080;
+                }
+        }
+
+
+如果sh脚本都检查完毕，一直没有权限运行。步骤：
+file /root/csp/csp1.1/start-worker-long_tasks_pdf_convert.sh   
+
+apt update
+apt install dos2unix -y
+转换脚本格式
+dos2unix /root/csp/csp1.1/start-worker-long_tasks_pdf_convert.sh
+再重启运行即可
+
+
+日志自动上传oss
+crontab -e
+0 1 * * * /root/miniconda3/envs/csp1/bin/python /root/csp/csp1.1/upload_logs_to_oss.py >> /var/log/oss_upload.log 2>&1                 dev服务
+
+0 1 * * * /home/csp/miniconda3/envs/csp2.0/bin/python /home/csp2.0/csp/upload_logs_to_oss.py >> /var/log/oss_upload.log 2>&1                        test服务
+
+0 1 * * *  /home/csp/miniconda3/envs/csp/bin/python  /home/csp/server/upload_logs_to_oss.py >> /var/log/oss_upload.log 2>&1       29 and 199
+
+touch /var/log/oss_upload.log
+sudo chmod 644 /var/log/oss_upload.log
+
+es同义词两种，直接操作esAPI，第二种：本地维护txt
+直接操作esAPI方便部署，在均衡负载的情况下，方便使用
+本地维护txt，需要一个文件服务器，多台服务器需要访问同一个文件
+
+
+索引时应用：
+
+缺点：增大索引体积、影响评分统计、更新规则需重新索引。
+
+优点：查询性能稍好（但通常不显著）。
+
+搜索时应用（推荐）：
+
+优点：不影响索引体积和评分、无需重新索引即可更新规则。
+
+缺点：轻微查询性能开销（通常可忽略），且支持更复杂的多词同义词处理（synonym_graph过滤器）。
+
+
+
+docker cp /home/aigc/egpt/elasticsearch-analysis-ik-8.11.0.zip egpt-es:/tmp/
+
+curl -XGET "http://elastic:cb2OuiynQNzwS0Sz+JR=@localhost:9200/egpt-es/_doc/file_1?pretty"
+
+
+
+curl -u elastic:cb2OuiynQNzwS0Sz+JR=@ -XPOST "http://localhost:9200/_analyze?pretty" \
+-H 'Content-Type: application/json' \
+-d '
+{
+  "analyzer": "standard",
+  "text": ".pptx"
+}
+'
+
+{
+    "query": {
+      "term": {
+        "file_type.keyword": ".txt"
+      }
+    }
+  
+}
+docker run -d \
+  --name es-container \
+  -p 9200:9200 \
+  -p 9300:9300 \
+  -e "discovery.type=single-node" \
+  -e "xpack.security.enabled=false" \
+  docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+
+
+重新运行，挂载插件目录
+docker run -d \
+  --name es-container \
+  -p 9200:9200 \
+  -p 9300:9300 \
+  -e "discovery.type=single-node" \
+  -e "xpack.security.enabled=false" \
+  -v /data/elasticsearch/plugins:/usr/share/elasticsearch/plugins \
+  docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+
+
+导出工单pdf
+sudo apt-get install build-essential python3-dev python3-pip python3-setuptools python3-wheel python3-cffi libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libffi-dev shared-mime-info
+
+# CentOS/RHEL
+sudo yum install gcc python3-devel cairo-devel pango-devel
+
+# 安装Python包
+pip install weasyprint jinja2 pillow
+
+# 如果需要支持base64图片
+pip install cairocffi
+
+
+显示所有虚拟环境
+conda info --envs
+删除虚拟环境
+conda remove -n 环境名 --all
+
+修改虚拟环境名称
+conda rename -n old_name new_name
+
+
+
+
+
+创建索引
+
+curl -X PUT "http://localhost:9201/c2_content_v2" -H 'Content-Type: application/json' -d'
+{
+  "c2_content_v2" : {
+    "settings" : {
+      "index" : {
+        "routing" : {
+          "allocation" : {
+            "include" : {
+              "_tier_preference" : "data_content"
+            }
+          }
+        },
+        "number_of_shards" : "1",
+        "provided_name" : "c2_content_v2",
+        "creation_date" : "1768290454278",
+        "analysis" : {
+          "analyzer" : {
+            "chinese_search_analyzer" : {
+              "filter" : [
+                "lowercase"
+              ],
+              "tokenizer" : "ik_smart"
+            },
+            "japanese_analyzer" : {
+              "filter" : [
+                "kuromoji_baseform",
+                "kuromoji_part_of_speech",
+                "cjk_width",
+                "lowercase"
+              ],
+              "tokenizer" : "kuromoji_tokenizer"
+            },
+            "english_search_analyzer" : {
+              "filter" : [
+                "lowercase",
+                "stop"
+              ],
+              "tokenizer" : "standard"
+            },
+            "japanese_search_analyzer" : {
+              "filter" : [
+                "kuromoji_baseform",
+                "kuromoji_part_of_speech",
+                "cjk_width",
+                "lowercase"
+              ],
+              "tokenizer" : "kuromoji_tokenizer"
+            },
+            "chinese_analyzer" : {
+              "filter" : [
+                "lowercase"
+              ],
+              "tokenizer" : "ik_max_word"
+            },
+            "synonym_analyzer" : {
+              "filter" : [
+                "lowercase"
+              ],
+              "tokenizer" : "ik_smart"
+            },
+            "english_analyzer" : {
+              "filter" : [
+                "lowercase",
+                "stop",
+                "porter_stem"
+              ],
+              "tokenizer" : "standard"
+            }
+          }
+        },
+        "number_of_replicas" : "0",
+        "uuid" : "RE59HRcvSG-85Y_GLBfwoQ",
+        "version" : {
+          "created" : "8500003"
+        }
+      }
+    }
+  }
+}
+
+
+进入数据库
+docker exec -it 065d2efa531f bash
+ psql -U postgres -d egpt
+
+
+curl -X PUT "http://localhost:9200/c2_content_v2" \
+  -H "Content-Type: application/json" \
+  -d '{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "analysis": {
+        "analyzer": {
+          "chinese_search_analyzer": {
+            "filter": ["lowercase"],
+            "tokenizer": "ik_smart"
+          },
+          "japanese_analyzer": {
+            "filter": [
+              "kuromoji_baseform",
+              "kuromoji_part_of_speech",
+              "cjk_width",
+              "lowercase"
+            ],
+            "tokenizer": "kuromoji_tokenizer"
+          },
+          "english_search_analyzer": {
+            "filter": ["lowercase", "stop"],
+            "tokenizer": "standard"
+          },
+          "japanese_search_analyzer": {
+            "filter": [
+              "kuromoji_baseform",
+              "kuromoji_part_of_speech",
+              "cjk_width",
+              "lowercase"
+            ],
+            "tokenizer": "kuromoji_tokenizer"
+          },
+          "chinese_analyzer": {
+            "filter": ["lowercase"],
+            "tokenizer": "ik_max_word"
+          },
+          "synonym_analyzer": {
+            "filter": ["lowercase"],
+            "tokenizer": "ik_smart"
+          },
+          "english_analyzer": {
+            "filter": ["lowercase", "stop", "porter_stem"],
+            "tokenizer": "standard"
+          }
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "title": {
+        "type": "text",
+        "analyzer": "chinese_analyzer",
+        "search_analyzer": "chinese_search_analyzer",
+        "fields": {
+          "synonym": {
+            "type": "text",
+            "analyzer": "synonym_analyzer",
+            "search_analyzer": "synonym_analyzer"
+          },
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 1000000
+          },
+          "en": {
+            "type": "text",
+            "analyzer": "english_analyzer",
+            "search_analyzer": "english_search_analyzer"
+          },
+          "ja": {
+            "type": "text",
+            "analyzer": "japanese_analyzer",
+            "search_analyzer": "japanese_search_analyzer",
+            "term_vector": "with_positions_offsets"
+          },
+          "highlight": {
+            "type": "text",
+            "analyzer": "chinese_analyzer"
+          }
+        }
+      },
+      "content": {
+        "type": "text",
+        "analyzer": "chinese_analyzer",
+        "search_analyzer": "chinese_search_analyzer",
+        "fields": {
+          "synonym": {
+            "type": "text",
+            "analyzer": "synonym_analyzer",
+            "search_analyzer": "synonym_analyzer"
+          },
+          "en": {
+            "type": "text",
+            "analyzer": "english_analyzer",
+            "search_analyzer": "english_search_analyzer"
+          },
+          "ja": {
+            "type": "text",
+            "analyzer": "japanese_analyzer",
+            "search_analyzer": "japanese_search_analyzer",
+            "term_vector": "with_positions_offsets"
+          },
+          "highlight": {
+            "type": "text",
+            "analyzer": "chinese_analyzer"
+          }
+        }
+      },
+      "type": {
+        "type": "integer"
+      },
+      "dataId": {
+        "type": "keyword"
+      },
+      "dataSubId": {
+        "type": "keyword"
+      },
+      "file_path": {
+        "type": "text",
+        "analyzer": "chinese_analyzer",
+        "search_analyzer": "chinese_search_analyzer",
+        "fields": {
+          "keyword": {
+            "type": "keyword"
+          }
+        }
+      },
+      "file_type": {
+        "type": "keyword"
+      },
+      "file_size": {
+        "type": "integer"
+      },
+      "file_hash": {
+        "type": "keyword"
+      }
+    }
+  }
+}'
+
+1.进入到新创建的pg，bin目录下执行pg_ctl start -D "原硬盘目录下的pg的data目录"
+
+
+使用pg_dump导出数据库结构以及数据
+pg_dump -h 10.11.228.174 -p 5432 -U postgres -d postgres > backup.dump
+
+
+
+
+
+
+# 查看崩溃时刻的 Celery 日志
+journalctl -u csp-worker --since "2026-03-03 13:55:00" --until "2026-03-03 14:05:00" --no-pager
+
+# 查看完整堆栈信息
+journalctl -u csp-worker --since "2026-03-03 13:58:00" --until "2026-03-03 13:59:00" -o verbose
+
+# 查看崩溃前的最后几条记录
+journalctl -u csp-worker --since "2026-03-03 13:57:00" --until "2026-03-03 13:58:30" --no-pager | tail -50
+
+
+# 查看 Redis timeout 配置
+redis-cli -h <host> -p 6379 -a <password> CONFIG GET timeout
+# 如果返回 > 0，就是这个原因
+
+
+
+# 查看 TCP keepalive 配置
+redis-cli -h r-uf6ci3yx3qcijgt3rb.redis.rds.aliyuncs.com -p 6379 -a xTK36_bclc39 CONFIG GET tcp-keepalive
+
+# 查看最大连接数
+redis-cli -h r-uf6ci3yx3qcijgt3rb.redis.rds.aliyuncs.com -p 6379 -a xTK36_bclc39 CONFIG GET maxclients
+
+# 查看内存配置
+redis-cli -h r-uf6ci3yx3qcijgt3rb.redis.rds.aliyuncs.com -p 6379 -a xTK36_bclc39 CONFIG GET maxmemory
+
+# 查看内存淘汰策略
+redis-cli -h r-uf6ci3yx3qcijgt3rb.redis.rds.aliyuncs.com -p 6379 -a xTK36_bclc39 CONFIG GET maxmemory-policy
+
+
+
+# 查看当前内存使用情况
+redis-cli -h r-uf6ci3yx3qcijgt3rb.redis.rds.aliyuncs.com -p 6379 -a xTK36_bclc39 INFO memory | grep -E "used_memory_human|maxmemory_human|mem_fragmentation_ratio"
+
+# 查看当前连接数
+redis-cli -h r-uf6ci3yx3qcijgt3rb.redis.rds.aliyuncs.com -p 6379 -a xTK36_bclc39 INFO stats | grep -E "connected_clients|rejected_connections"
+
+# 查看 Redis 运行时间（是否重启过）
+redis-cli -h r-uf6ci3yx3qcijgt3rb.redis.rds.aliyuncs.com -p 6379 -a xTK36_bclc39 INFO server | grep uptime
+
+
+
+# 查看 Redis 是否有内存碎片整理活动
+redis-cli -h r-uf6ci3yx3qcijgt3rb.redis.rds.aliyuncs.com -p 6379 -a xTK36_bclc39 INFO memory | grep -E "active_defrag|allocator"
+
+
+
+apt list --upgradable | grep -i security
+
+apt list --upgradable | grep bind9
+
+
+apt list --installed | grep bind9
+
+
+start.sh启动项目 gunicorn以及uvicorn
+#!/bin/bash
+export PATH="/home/csp/miniconda3/envs/csp/bin:$PATH"
+
+cd /home/csp/csp
+
+if [ v"$DJANGO_ENV" == 'vdev' ]; then
+    python manage.py makemigrations system
+    python manage.py migrate
+    python manage.py runserver 0.0.0.0:8000
+
+    
+    else
+    
+    python manage.py migrate
+    
+    # gunicorn server.wsgi:application -w 8 -k gthread -b 0.0.0.0:8000
+    
+    python -m uvicorn server.asgi:application --workers 4 --host 0.0.0.0 --port 8000
+    
+    
+    #gunicorn server.wsgi:application -w 4 -k gthread -b 0.0.0.0:8000 \
+     #--limit-request-line 0  \
+     #--limit-request-field_size 0 \
+    
+     #--print-config
+    
+
+    
+fi
+
+
+
+#进入docker数据库命令
+docker exec -it 容器名 psql -U postgres -d 数据库名
+
+
+遇到pkg_resources 不存在
+
+pip uninstall setuptools -y
+pip install "setuptools<68"
+
+
+
+更新linux的nginx
+sudo apt remove nginx nginx-common nginx-core     卸载当前 Ubuntu 自带的 nginx
+ sudo cp -r /etc/nginx /etc/nginx.bak    备份
+sudo apt update
+sudo apt install curl gnupg2 ca-certificates lsb-release ubuntu-keyring
+
+# 添加官方 GPG 密钥
+curl -fsSL https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg
+
+# 添加主线版（mainline）APT 仓库
+echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" | sudo tee /etc/apt/sources.list.d/nginx-mainline.list
+
+sudo apt update
+sudo apt install nginx
+
+
+遇到conda 错误  
+
+An HTTP error occurred when trying to retrieve this URL.
+HTTP errors are often intermittent, and a simple retry will get you on your way.
+'https//mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/win-64'
+
+解决方案：
+第一步：彻底清除旧配置和缓存
+conda clean --all -y
+conda config --remove-key channels
+
+第二步：重新添加稳定且正确的国内镜像源
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/
+conda config --set show_channel_urls yes
+第三步：验证配置并重新创建环境
+conda config --show channels
+
+
+
+你是一个专业的AI短剧分镜师。请根据以下故事内容，生成第一季第1集的分镜脚本。
+
+故事背景：
+[把第一季第1集的剧情概要贴在这里]
+
+输出格式要求（Markdown表格）：
+| 镜号 | 景别 | 时长 | 画面描述（含角色外貌、服装、动作、环境） | 台词/内心独白 | 运镜/音效提示 |
+|:---|:---|:---|:---|:---|:---|
+
+要求：
+1. 每集总时长2-3分钟，约20-30个镜头
+2. 画面描述要具体、可视化，可直接用于AI绘画prompt
+3. 台词要有情感张力
+4. 每集结尾留钩子
+
+请开始生成。
+
+
+镜头提示词按照
+| 镜号 | 景别 | 时长 | 画面描述（含角色外貌、服装、动作、环境） | 台词/内心独白 | 运镜/音效提示 |
+|:---|:---|:---|:---|:---|:---|
+
+以及相对应的素材清单，每个镜头的相对应的素材清单，输出为txt文件
+
+
+
+
+✅ 解决方案：添加 PostgreSQL 官方源
+请按顺序执行以下命令：
+1. 安装必要依赖
+bash
+
+编辑
+
+
+
+sudo apt install -y curl ca-certificates gnupg lsb-release
+2. 导入 PostgreSQL 官方 GPG 密钥
+bash
+
+编辑
+
+
+
+curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
+3. 添加官方 APT 源
+bash
+
+编辑
+
+
+
+echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+4. 更新索引并安装
+bash
+
+编辑
+
+
+
+sudo apt update
+sudo apt install -y postgresql-16 postgresql-client-16
