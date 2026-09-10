@@ -1,0 +1,190 @@
+/** 镜头页：分镜列表 + 首帧（标准照）选择 + 视频抽卡生成 + 候选审核通过 */
+import { useEffect, useState } from 'react'
+import {
+  approveVideo, genVideo, listScriptAssets, listShots, listVideoCandidates, setShotFirstFrame,
+} from '../api'
+import { ErrBox, ScriptSelector, TaskBar, useScriptId } from '../components'
+import { usePollTask } from '../usePollTask'
+import type { Asset, Shot, VideoCandidate } from '../types'
+
+const STATUS_BADGE: Record<string, string> = {
+  '待生成': 'gray', '生成中': 'blue', '待审核': 'yellow', '通过': 'green', '需重做': 'red',
+}
+
+const TYPE_LABEL: Record<string, string> = { character: '角色', scene: '场景', prop: '道具' }
+
+export default function ShotsPage() {
+  const scriptId = useScriptId()
+  const [shots, setShots] = useState<Shot[]>([])
+  const [assets, setAssets] = useState<Asset[]>([])
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = () => {
+    listShots(scriptId).then(setShots).catch(e => setError(e.message))
+    listScriptAssets(scriptId).then(setAssets).catch(() => {})
+  }
+  useEffect(() => { refresh() }, [scriptId])
+
+  return (
+    <div>
+      <div className="page-head">
+        <h2>🎬 镜头生成与审核</h2>
+        <ScriptSelector />
+      </div>
+      <p className="muted" style={{ marginTop: -6 }}>
+        每个镜头会用关联角色/场景的<b>标准照作为视频首帧</b>（蓝框标注）。可手动为镜头指定首帧；
+        没有标准照时请先到「标准照」页生成并锁定。
+      </p>
+      {shots.length === 0 && <p className="muted">暂无镜头，请先在「剧本」页提交分镜。</p>}
+      <ErrBox error={error} />
+
+      {shots.map(s => <ShotCard key={s.id} shot={s} assets={assets} onChanged={refresh} />)}
+    </div>
+  )
+}
+
+/** 单个镜头卡片：独立持有视频生成任务，scopeKey=video:<shotId>
+ *  切到别的页面再回来，进度条会从 localStorage / 后端任务恢复 */
+function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[]; onChanged: () => void }) {
+  const [cands, setCands] = useState<VideoCandidate[] | null>(null)
+  const [taskId, setTaskId] = useState<number | null>(null)
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [frameBusy, setFrameBusy] = useState(false)
+  const { task, polling } = usePollTask(taskId, `video:${s.id}`)
+
+  // 当前生效首帧：手动指定优先，否则 refs 中 is_first_frame 的那个（后端自动选取）
+  const firstRef = s.refs.find(r => r.is_first_frame)
+  // 首帧下拉列项目所有素材（不管有没有标准照），让用户能提前指定
+  const lockedAssets = assets.filter(a => a.standard_image)
+  const allAssets = assets
+  const hasFirstFrame = Boolean(firstRef)
+
+  const loadCands = () =>
+    listVideoCandidates(s.id).then(setCands).catch(e => setError(e.message))
+
+  useEffect(() => {
+    if (task?.status === 'success') {
+      setOpen(true)
+      loadCands()
+      onChanged()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task?.status])
+
+  const changeFirstFrame = async (assetIdStr: string) => {
+    setError(null)
+    setFrameBusy(true)
+    try {
+      await setShotFirstFrame(s.id, assetIdStr ? Number(assetIdStr) : null)
+      onChanged()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setFrameBusy(false)
+    }
+  }
+
+  const generate = async () => {
+    setError(null)
+    try {
+      const t = await genVideo(s.id, 2)
+      setTaskId(t.id)
+      setOpen(true)
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  const approve = async (cid: number) => {
+    try {
+      await approveVideo(s.id, cid)
+      await Promise.all([loadCands(), onChanged()])
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  return (
+    <div className="shot-card">
+      <div className="head">
+        <strong>#{s.shot_no}</strong>
+        <span className={`badge ${STATUS_BADGE[s.status] ?? 'gray'}`}>{s.status}</span>
+        <span className="muted">{s.scene} · {s.shot_size} · {s.camera_movement} · {s.duration}s</span>
+        <span style={{ flex: 1 }} />
+        <button className="primary" disabled={polling || frameBusy} onClick={generate}>
+          {polling ? '生成中…' : '生成视频 ×2'}
+        </button>
+        <button onClick={() => { setOpen(!open); loadCands() }}>
+          {open ? '收起候选' : '查看候选'}
+        </button>
+      </div>
+      <div className="desc">{s.description}</div>
+
+      {/* 关联素材与首帧 */}
+      <div className="shot-refs">
+        {s.refs.length === 0 && (
+          <span className="muted">⚠️ 该镜头未关联到任何角色/场景（分镜中的名称与素材名不一致，或对应素材未提取）。
+            可在下方手动选择一个素材作为首帧。</span>
+        )}
+        {s.refs.map(r => (
+          <div key={r.id} className={`shot-ref ${r.is_first_frame ? 'is-first' : ''}`}
+               title={r.is_first_frame ? '视频首帧' : TYPE_LABEL[r.type] ?? r.type}>
+            {r.standard_image
+              ? <img src={r.standard_image} alt={r.name} />
+              : <div className="shot-ref-empty">无标准照</div>}
+            <div className="shot-ref-name">
+              <span className={`badge ${r.type === 'character' ? 'blue' : r.type === 'scene' ? 'yellow' : 'gray'}`}>
+                {TYPE_LABEL[r.type] ?? r.type}
+              </span> {r.name}
+            </div>
+            {r.is_first_frame && <div className="first-frame-tag">首帧</div>}
+            {!r.standard_image && <div className="shot-ref-warn">待生成</div>}
+          </div>
+        ))}
+
+        <div className="shot-frame-select">
+          <label>首帧素材：</label>
+          <select
+            value={s.first_frame_asset_id ?? ''}
+            disabled={frameBusy || allAssets.length === 0}
+            onChange={e => changeFirstFrame(e.target.value)}
+          >
+            <option value="">自动（角色 → 场景）</option>
+            {allAssets.map(a => (
+              <option key={a.id} value={a.id}>
+                {TYPE_LABEL[a.type] ?? a.type} · {a.name}
+                {a.standard_image ? '' : '  (无标准照)'}
+              </option>
+            ))}
+          </select>
+          {allAssets.length === 0 && <span className="muted">项目还没有任何素材</span>}
+          {!hasFirstFrame && allAssets.length > 0 && (
+            <span className="muted">⚠️ 自动匹配不到：请在左侧手动选一个素材作为首帧</span>
+          )}
+        </div>
+      </div>
+
+      <ErrBox error={error || (task?.status === 'failed' ? task.error : null)} />
+      <TaskBar task={task} polling={polling} label={`视频生成（约 ${Math.round(s.duration)}s 镜头，单条 2~6 分钟）`} />
+
+      {open && (cands?.length ?? 0) > 0 && (
+        <div className="video-grid">
+          {cands!.map(c => (
+            <div key={c.id}>
+              <video src={c.video_url} controls preload="metadata" />
+              <div className="cand-actions">
+                <span className={`badge ${c.status === 'approved' ? 'green' : c.status === 'rejected' ? 'red' : 'gray'}`}>
+                  {c.status === 'approved' ? '已通过' : c.status === 'rejected' ? '已淘汰' : '待审核'}
+                </span>
+                {c.status !== 'approved' && (
+                  <button className="primary" onClick={() => approve(c.id)}>通过</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}

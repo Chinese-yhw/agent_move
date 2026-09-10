@@ -1,0 +1,48 @@
+# AI 短剧生成平台 —— 后端栈
+# GPU（ComfyUI/CosyVoice）在 AutoDL 上，本 compose 只跑平台本身，普通云服务器/本机即可
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: drama_gen
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/drama_gen
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - media_data:/srv/data/media
+    ports: ["8000:8000"]
+    depends_on: [postgres, redis]
+
+  # GPU 任务串行：单 worker、一次领一个任务，匹配单张 4090D
+  celery_worker:
+    build: ./backend
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/drama_gen
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - media_data:/srv/data/media
+    depends_on: [backend, redis]
+
+  frontend:
+    build: ./frontend
+    ports: ["80:80"]
+    depends_on: [backend]
+
+volumes:
+  pg_data:
+  media_data:
