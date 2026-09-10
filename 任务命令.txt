@@ -1,0 +1,5 @@
+.\.venv\Scripts\uvicorn app.main:app --port 8000    后端
+
+npm run dev   前端
+
+.\.venv\Scripts\celery -A app.tasks.celery_app.celery_app worker --loglevel=info --pool=solo     任务
