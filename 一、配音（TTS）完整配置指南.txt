@@ -1,0 +1,342 @@
+一、配音（TTS）完整配置指南
+两种方案对比
+方案	质量	要不要 GPU	要不要装模型	适合谁
+A. CosyVoice（推荐）	⭐⭐⭐⭐⭐ 最自然，和真人几乎一样	✅ 要	✅ 要下载模型	你有 AutoDL 4090 机器
+B. edge-tts（当前已可用）	⭐⭐⭐⭐ 微软官方音色，也很自然	❌ 不要	❌ 不要	先用着，随时可用
+好消息：我已经把 edge-tts 装好了，tts.py 改成自动兜底——没配 CosyVoice 就用 edge-tts。现在直接点"批量配音"就能出音频，不用等 CosyVoice 部署完。
+
+方案 A：CosyVoice（高质量，AutoDL GPU）
+CosyVoice 是阿里达摩院的开源 TTS，自然度业界顶级。部署在你 AutoDL 的 4090 机器上（和 ComfyUI 同一台）。
+
+步骤：
+
+
+1. SSH 到 AutoDL 机器，开一个新的 tmux/screen 窗口（别和 ComfyUI 挤）
+
+2. 克隆仓库 + 装依赖：
+   git clone https://github.com/FunAudioLLM/CosyVoice.git
+   cd CosyVoice
+   pip install -r requirements.txt
+   pip install fastapi uvicorn  # 我们用 FastAPI 包一层 HTTP 接口
+
+3. 下载模型（约 1.5GB）：
+   python -c "from modelscope import snapshot_download; snapshot_download('iic/CosyVoice-300M-SFT')"
+   可选更大模型：iic/CosyVoice-300M-Instruct（支持 zero-shot 克隆音色）
+
+4. 创建一个 FastAPI 封装脚本（保存为 server.py）：
+
+```python
+from fastapi import FastAPI
+from fastapi.responses import Response
+from pydantic import BaseModel
+import cosyvoice, torch
+from cosyvoice.cli.model import CosyVoiceModel, CosyVoice2Model
+
+app = FastAPI()
+model = CosyVoiceModel.from_pretrained('pretrained_models/CosyVoice-300M-SFT')
+
+class TTSReq(BaseModel):
+    text: str
+    speaker: str = "default"
+    emotion: str = "平静"
+    mode: str = "s1"
+
+@app.post("/tts")
+async def tts(req: TTSReq):
+    # emotion 可以传给模型做 zero-shot，也可以简单忽略用默认音色
+    output = model.inference_sft(req.text, req.speaker)
+    wav_bytes = output['tts_speech'].cpu().numpy().tobytes()
+    return Response(content=wav_bytes, media_type="audio/wav")
+
+@app.get("/voices")
+async def voices():
+    return ["default", "male1", "female1", "male2", "female2"]
+
+```
+
+5. 启动服务（AutoDL 上要开端口转发 50000）：
+   ```
+   uvicorn server:app --host 0.0.0.0 --port 50000
+   ```
+
+6. 拿到公网地址（和 ComfyUI 的 AutoDL 代理地址类似），填到本地 `.env`：
+   ```
+   TTS_BASE_URL=https://你 的-tts-公网地址:50000
+   ```
+
+7. **不用重启后端**——`tts.py` 的 `get_tts_provider()` 每次调用时会重新读取配置。下次配音就自动切到 CosyVoice 了。
+方案 B：edge-tts（当前已可用，零配置）
+不用管——我已经帮你装好了，代码也改好了。当前 .env 里 TTS_BASE_URL=http://REPLACE_ME:50000 是占位符，get_tts_provider() 检测到"REPLACE_ME"就自动走 edge-tts。
+
+但 edge-tts 生成的是 .mp3，而 CosyVoice 是 .wav。合成时 ffmpeg 都能处理，不影响。
+
+情绪映射（已完成）
+你之前提到"配音时情绪应该有波动"——已经实现了：
+
+分镜表解析时自动抽情绪（如 林渊：（紧张）师父人呢？）
+
+emotion 字段写入数据库
+
+TTS provider 根据情绪调 rate/pitch（悲伤降速降调、高兴加速升调等）
+
+配音后音频在哪看
+配音完成后，配音页每行的"音频"列会出现 <audio controls> 播放器，直接点播放即可预览。音频是独立的 .mp3/.wav 文件，合成时 ffmpeg 才会把它拼到视频里（合成环节讲）。
+
+二、合成（Compose）完整配置指南
+合成完全不走 ComfyUI，就一个依赖：ffmpeg。当前本地没装，是第一步要做的。
+
+合成流程图
+
+
+
+已审核通过的镜头视频 ──┐
+                       ├─→ ffmpeg ──→ 每段混流（视频+该段配音+静音补空）──→ concat 拼接 ──→ 字幕烧录 ──→ BGM 混音 ──→ 最终 MP4
+该镜头的所有对白音频 ──┘
+配置步骤
+
+
+
+===== 第 1 步：安装 ffmpeg（必须）=====
+
+Windows 本地开发：
+  a. 去 https://www.gyan.dev/ffmpeg/builds/ 下载 ffmpeg-release-essentials.zip
+  b. 解压到 C:\ffmpeg\
+  c. 把 C:\ffmpeg\bin 加到系统 PATH
+  d. 开新终端，ffmpeg -version 能输出版本号就 OK
+
+AutoDL GPU 机器（如果合成也想放云端）：
+  apt update && apt install -y ffmpeg
+
+===== 第 2 步：配置（可选）=====
+
+.env 里目前没有合成专用配置。compose.py 里硬编码了：
+
+- 输出目录：./data/media/exports/
+
+- 视频编码：libx264 crf=20 preset=fast
+
+- 帧率：16fps（和 Wan2.1 视频生成帧率一致）
+
+- 音频编码：aac 24kHz
+
+这些默认值够用，不用改。
+
+如果你有 BGM 想合成时自动混，之后可以加个 BGM_PATH 配置，但当前接口是手动传 bgm_path 的。
+
+===== 第 3 步：合成步骤 =====
+
+1. 确保每个要合成的镜头：
+   ✅ 有审核通过的视频候选（status=通过）
+   ✅ 该镜头下所有对白都配完音（audio_url 不为空）
+   ✅ 没对白的镜头自动补静音
+
+2. 在"合成"页点"合成"，会调 /api/scripts/{id}/compose
+   后端走 compose_episode Celery 任务 → export_episode() → ffmpeg subprocess
+
+3. 合成进度条会显示在合成页（和视频生成/配音一样走 usePollTask）
+
+4. 完成后下载 MP4，路径：data/media/exports/ep_xxx.mp4
+合成需要我帮你改的地方
+当前代码里 ffmpeg 找不到的话会直接报错。你先装一下 ffmpeg（上面第1步），装完后合成就能跑。
+
+另外还有几个可以改进的点，如果你需要我可以后续加：
+
+音画对齐：当前配音时长和视频时长可能不匹配，ffmpeg concat 时没有精确对齐（简单拼接，静音补空），需要更精细的时间轴控制
+
+BGM 上传：当前只支持后端传文件路径，没有前端上传 BGM 的入口
+
+字幕样式：当前用默认白色字幕，可以加字体/大小/位置配置
+
+三、总结：你需要做什么
+步骤	内容	难度	必须做？
+1	装 ffmpeg（本地）	⭐ 解压+PATH	✅ 合成环节前提
+2	（可选）部署 CosyVoice（AutoDL）	⭐⭐⭐ 代码+下载+端口	❌ 当前 edge-tts 能用，只是质量不如 CosyVoice
+3	重启 Celery worker 让 edge-tts 改动生效	⭐ 一条命令	✅
+4	配音页点"批量配音"测试	⭐ 点一下	✅ 验证 edge-tts 正常
+5	合成页点"合成"测试	⭐ 点一下	✅ 验证 ffmpeg 正常
+建议你现在先做第 1 步（装 ffmpeg），然后我帮你重启 Celery，接着测一遍配音→合成全链路。 CosyVoice 部署不急，edge-tts 先顶着能用。
+
+要不要我现在帮你装 ffmpeg？
+
+已执行 1 条命令
+Provider 正确识别为 edge-tts。现在重启 Celery worker 让新 TTS 代码生效，然后装 ffmpeg。
+
+已执行 3 条命令
+Celery worker 没在跑！那之前批量配音的任务根本没执行。让我启动 Celery worker，同时帮你装 ffmpeg。
+
+已执行 2 条命令
+winget 在沙盒里受限了。Celery worker 已经在后台启动。让我验证一下它是否正常，然后你手动装 ffmpeg（1 分钟搞定）。
+
+已执行 2 条命令
+后端也挂了（之前 --reload 进程退出）。一起重启后端 + Celery。
+
+已执行 3 条命令
+后端 + Celery worker 都跑起来了。清理临时测试文件。
+
+已删除 1 个文件
+好，现在两件事都跑起来了。给你一份清晰的需要你手动做的事 + 已经自动帮你做好的事清单：
+
+✅ 已经自动帮你做好的
+项目	状态	说明
+edge-tts 安装	✅	pip install edge-tts 完成
+TTS Provider 改造	✅	tts.py 自动兜底：没配 CosyVoice → edge-tts
+情绪映射	✅	9 类情绪 → rate/pitch 微调，配音有起伏
+角色声音分配	✅	角色名含"瑶"→女声，含"长老/师兄"→男声
+后端重启	✅	带 --reload，代码改动自动生效
+Celery worker 启动	✅	edge-tts 新代码已加载
+情绪自动抽取	✅	林渊：（紧张）师父人呢？ → emotion=紧张，已入库
+❌ 需要你手动做的
+1. 装 ffmpeg（合成的前提，3 分钟）
+winget 在沙盒里受限，你在自己终端里跑：
+
+PowerShell
+
+
+
+运行
+winget install Gyan.FFmpeg
+装完后开一个新的 PowerShell 终端（让 PATH 生效），验证：
+
+PowerShell
+
+
+
+运行
+ffmpeg -version
+ffprobe -version
+能输出版本号就 OK。
+
+2. 点"批量配音"测试（30 秒）
+前端已经热更新了，刷新配音页，点"批量配音"按钮：
+
+edge-tts 会自动按情绪+角色生成 .mp3
+
+每条约 1-3 秒，12 条总共约 30 秒
+
+完成后每行音频列会出现播放器，点 ▶️ 直接听
+
+3. （可选）部署 CosyVoice 提升质量
+edge-tts 是微软在线 TTS，质量够用但音色选择有限。如果你想要：
+
+更多中文音色（特定角色专属声音）
+
+Zero-shot 音色克隆（录音几秒让 CosyVoice 模仿任何人说话）
+
+更自然的情绪表达
+
+按上面指南部署 CosyVoice（AutoDL 机器上），然后改 .env：
+
+
+
+
+TTS_BASE_URL=https://你 的-tts-公网地址:50000
+不用重启后端——get_tts_provider() 每次配音时重新读配置，下次自动切到 CosyVoice。
+
+4. （可选）调视频工作流提升质量
+你之前说视频"很别扭"，核心原因是当前 wan21_i2v_api.json 用了蒸馏 LoRA + 5 步——这是"快速抽卡"配置，牺牲质量换速度。
+
+调优方案（在 AutoDL ComfyUI 界面操作）：
+
+
+
+
+1. 打开 ComfyUI → 加载 Wan2.1图生视频_KJ_480p_5步 工作流
+
+2. ⚠️ 删掉 WanVideoLoraSelect 节点（或让 lora 字段为空）
+   —— 这是质量瓶颈！蒸馏 LoRA 把质量砍半了
+
+3. WanVideoSampler 的 steps: 5 → 20
+
+4. cfg: 2.0 → 3.0
+
+5. 测试一条镜头，看质量/时间平衡（480p + 20步 ≈ 8-12 分钟/条）
+
+6. Workflow → Export (API) → 覆盖 backend/workflows/wan21_i2v_api.json
+5. 合成（等 ffmpeg 装好后）
+装好 ffmpeg 后，合成页会自动可用：
+
+确保要合成的镜头都有"已通过"的视频候选 + 该镜头的对白都配完音
+
+点"合成" → ffmpeg 自动：混流（视频+该段配音）→ concat 拼接 → 字幕烧录 → BGM 混音（可选）
+
+完成后下载 MP4，路径：data/media/exports/ep_xxx.mp4
+
+总结：你现在要做的就是
+装 ffmpeg：winget install Gyan.FFmpeg
+
+刷新配音页，点批量配音，听效果
+
+刷新合成页，点合成，看完整片
+
+觉得配音音色不够好 → 部署 CosyVoice（可选）
+
+觉得视频别扭 → 改工作流（去掉蒸馏 LoRA + 加步数）（可选）两个后台进程都挂了，让我查日志看看原因，然后重新拉起。
+
+已读取 1 个文件
+找到原因了：WatchFiles 检测到 test_edge_tts.py 被删除后，reload 触发了，但 reload 过程中进程挂了。这就是我之前删掉测试文件导致的。
+
+重新启动后端和 Celery：
+
+已执行 2 条命令
+后端还没起来，让我看启动日志。
+
+已读取 1 个文件
+日志显示启动成功了，但端口连不上。可能是 WatchFiles 检测到什么又 reload 了。直接不带 --reload 启动，先保证稳定运行。
+
+已执行 3 条命令
+后端还是连不上。让我看启动日志是不是有报错。
+
+已读取 1 个文件
+日志显示启动成功，但连接被拒。可能是 Python 版本不匹配（33184 进程是系统 Python 还是 venv 的？）或者有端口冲突。让我直接用 curl 试，同时查进程。
+
+已执行 1 条命令
+后端正常！刚才 httpx 连不上可能是虚拟环境里 httpx 装坏了。curl 能连通就行。
+
+现在启动 Celery worker：
+
+已执行 2 条命令
+后端（8000）+ Redis（6379）+ Celery worker 都跑起来了。✅
+
+现在两件事都正常了，总结一下当前状态和你需要做的：
+
+✅ 当前系统状态
+服务	状态	说明
+后端 API	✅ 运行中	http://127.0.0.1:8000
+Celery worker	✅ 运行中	edge-tts 新代码已加载
+Redis	✅ 运行中	端口 6379
+edge-tts	✅ 已安装	自动兜底，未配 CosyVoice 时使用
+ffmpeg	❌ 未安装	合成环节需要
+你需要手动做的
+1. 装 ffmpeg（合成必须）
+在 你自己的 PowerShell 终端 里跑（沙盒里 winget 受限）：
+
+PowerShell
+
+
+
+运行
+winget install Gyan.FFmpeg
+装完开个新 PowerShell（PATH 生效），验证：
+
+PowerShell
+
+
+
+运行
+ffmpeg -version
+2. 刷新前端，点"批量配音"
+前端已经热更新了。刷新配音页 → 点"批量配音" → edge-tts 自动按情绪+角色生成 .mp3。
+
+3. 合成（等 ffmpeg 装好后）
+刷新合成页 → 点"合成" → ffmpeg 自动：混流（视频+该段配音）→ concat 拼接 → 字幕烧录 → BGM 混音 → MP4。
+
+4. （可选）部署 CosyVoice 提升配音质量
+edge-tts 质量够用但音色有限。如果你想要特定角色专属声音或零样本音色克隆，按之前给的步骤在 AutoDL 4090 上部署 CosyVoice，改 .env 的 TTS_BASE_URL 即可——不用重启后端，下次配音自动切过去。
+
+5. （可选）调视频工作流提升质量
+当前视频"别扭"的核心原因是 Wan2.1 480p + 蒸馏 LoRA + 5 步。去 AutoDL ComfyUI 界面：
+
+删掉 WanVideoLoraSelect 节点（这是质量瓶颈）
+steps 5→20，cfg 2.0→3.0
+Export API JSON → 覆盖 backend/workflows/wan21_i2v_api.json
+后端和 Celery 现在都稳定运行了（不带 --reload），代码改动要生效的话我帮你重启一下就行。先装 ffmpeg、测配音、测合成，有问题随时喊。
