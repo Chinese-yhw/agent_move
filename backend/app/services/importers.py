@@ -42,20 +42,84 @@ def _find_col(col_map: dict[str, int], *names: str) -> int | None:
     return None
 
 
+def _normalize_emotion(raw: str) -> str:
+    """归一化情绪词到 CosyVoice 支持的有限集合。
+    CosyVoice 常见 emotion 枚举：中性/平静、悲伤/伤心、高兴/开心、愤怒/生气、
+    惊讶/震惊、低语/低沉、激动、恐惧/害怕、紧张。
+    未识别的情绪词回落到空串（调用方据此判断非情绪）。
+    """
+    if not raw:
+        return ""
+    e = raw.strip().strip("（）()【】[]").strip()
+    EMOTION_MAP = {
+        # 中性/平静
+        "中性": "中性", "平静": "中性", "正常": "中性", "默认": "中性", "普通": "中性", "neutral": "中性",
+        # 高兴
+        "高兴": "高兴", "开心": "高兴", "喜悦": "高兴", "快乐": "高兴", "欣喜": "高兴", "笑": "高兴",
+        "欢笑": "高兴", "兴奋": "高兴", "happy": "高兴", "joy": "高兴",
+        # 悲伤
+        "悲伤": "悲伤", "伤心": "悲伤", "难过": "悲伤", "哀伤": "悲伤", "低落": "悲伤", "悲恸": "悲伤",
+        "凄凉": "悲伤", "sad": "悲伤",
+        # 愤怒
+        "愤怒": "愤怒", "生气": "愤怒", "怒火": "愤怒", "气恼": "愤怒", "暴怒": "愤怒", "angry": "愤怒",
+        # 惊讶
+        "惊讶": "惊讶", "震惊": "惊讶", "意外": "惊讶", "诧异": "惊讶", "惊奇": "惊讶", "surprised": "惊讶",
+        # 恐惧
+        "恐惧": "恐惧", "害怕": "恐惧", "惊恐": "恐惧", "畏缩": "恐惧", "惊慌": "恐惧", "fear": "恐惧",
+        # 低语
+        "低语": "低语", "低沉": "低语", "低声": "低语", "轻声": "低语", "呢喃": "低语", "whisper": "低语",
+        "压低声音": "低语", "低嗓": "低语", "小声": "低语",
+        # 激动
+        "激动": "激动", "急切": "激动", "高昂": "激动", "激昂": "激动", "excited": "激动", "焦急": "激动",
+        # 紧张
+        "紧张": "紧张", "焦虑": "紧张", "不安": "紧张", "nervous": "紧张",
+    }
+    return EMOTION_MAP.get(e, EMOTION_MAP.get(e.lower(), ""))
+
+
 def _parse_dialogues(cell: str) -> list[dict]:
-    """台词单元格拆成多条：支持「林渊：… 阿瑶：…」多角色，及「字幕：…」旁白。"""
+    """台词单元格拆成多条：支持「林渊：… 阿瑶：…」多角色，及「字幕：…」旁白。
+    情绪标注格式：林渊：（紧张）师父人呢？ 或 林渊：师父人呢？（紧张）
+    台词中段括号如「（压低声音）」会作为情绪提示尝试归一化，但保留原文不删除。
+    未标注情绪时默认中性。
+    """
     cell = (cell or "").strip()
     if not cell or cell in ("无", "—", "-") or "无台词" in cell:
         return []
     matches = list(re.finditer(r"([一-龥A-Za-z·]{2,8})：", cell))
     if not matches:
-        return [{"character": "", "text": cell, "emotion": "平静"}]
+        return [{"character": "", "text": cell, "emotion": "中性"}]
     out: list[dict] = []
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(cell)
         text = cell[m.end():end].strip().strip("；; \t")
-        if text:
-            out.append({"character": m.group(1), "text": text, "emotion": "平静"})
+        if not text:
+            continue
+        emotion = "中性"
+        # 开头格式：林渊：（紧张）师父人呢？
+        m_open = re.match(r"^[\(（]([^）\)]{1,12})[\)）]\s*(.*)", text, re.DOTALL)
+        if m_open:
+            normalized = _normalize_emotion(m_open.group(1))
+            if normalized:  # 识别为情绪，删除括号、设情绪
+                emotion = normalized
+                text = m_open.group(2).strip()
+            # 否则是动作提示（如"将阿瑶推到身后"），保留原文不动
+        else:
+            # 结尾格式：林渊：师父人呢？（紧张）
+            m_close = re.search(r"[\(（]([^）\)]{1,12})[\)）][\s！？。；]*$", text)
+            if m_close:
+                normalized = _normalize_emotion(m_close.group(1))
+                if normalized:
+                    emotion = normalized
+                    text = text[:m_close.start()].strip()
+        # 台词中段含「（压低声音）」「（轻声）」等表演提示：尝试归一化为情绪，但保留原文
+        if emotion == "中性":
+            for m_hint in re.finditer(r"[\(（]([^）\)]{1,12})[\)）]", text):
+                normalized = _normalize_emotion(m_hint.group(1))
+                if normalized:
+                    emotion = normalized
+                    break
+        out.append({"character": m.group(1), "text": text, "emotion": emotion})
     return out
 
 
@@ -91,7 +155,16 @@ def parse_storyboard_table(text: str) -> list[dict]:
         first = cols[0].strip() if cols else ""
         # 行合并：不以数字开头且上一行存在 → 视为上一行的续行
         if shots and not re.match(r"^\d+", first) and len(cols) < 3:
-            shots[-1]["description"] += "\n" + first
+            # 若续行是「角色：…」格式，合并到台词单元格（多角色对白）；否则合并到画面描述
+            if re.match(r"^[一-龥A-Za-z·]{2,8}：", first):
+                shots[-1]["dialogues"] = _parse_dialogues(
+                    (shots[-1].get("dialogues_text_cache") or "") + "\n" + first
+                )
+                shots[-1]["dialogues_text_cache"] = (
+                    (shots[-1].get("dialogues_text_cache") or "") + "\n" + first
+                )
+            else:
+                shots[-1]["description"] += "\n" + first
             continue
         no_raw = pick(cols, "镜号") or str(i + 1)
         dur_raw = re.sub(r"[sS秒]", "", pick(cols, "时长", "时长(s)", "时长（秒）"))
@@ -122,9 +195,13 @@ def parse_storyboard_table(text: str) -> list[dict]:
             "shot_size": pick(cols, "景别"),
             "character_names": [],
             "dialogues": _parse_dialogues(dialogue_text),
+            "dialogues_text_cache": dialogue_text,  # 供后续续行合并用
         }
         if shot["description"] or shot["dialogues"]:
             shots.append(shot)
+    # 清理临时字段
+    for s in shots:
+        s.pop("dialogues_text_cache", None)
     return shots
 
 

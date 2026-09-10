@@ -1,0 +1,28 @@
+[Unit]
+Description=Drama Gen Backend (FastAPI + Uvicorn)
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/drama-gen/backend
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/drama-gen/backend/.env
+# MEDIA_ROOT 用服务器实际路径，确保和 celery 共用一个目录
+Environment=MEDIA_ROOT=/opt/drama-gen/data/media
+Environment=MEDIA_BASE_URL=/media
+# DATABASE_URL / REDIS_URL 也强制指定为系统安装版
+Environment=DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/drama_gen
+Environment=REDIS_URL=redis://localhost:6379/0
+ExecStart=/opt/drama-gen/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+# 给 ffmpeg 足够时间处理合成任务
+TimeoutStopSec=300
+
+# 让 celery 和 backend 共享同一媒体目录
+ReadWritePaths=/opt/drama-gen/data/media
+
+[Install]
+WantedBy=multi-user.target

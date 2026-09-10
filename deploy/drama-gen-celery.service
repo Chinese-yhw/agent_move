@@ -1,0 +1,29 @@
+[Unit]
+Description=Drama Gen Celery Worker (TTS + ComfyUI + 合成任务)
+After=network.target postgresql.service redis.service
+Requires=redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/drama-gen/backend
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/drama-gen/backend/.env
+Environment=MEDIA_ROOT=/opt/drama-gen/data/media
+Environment=MEDIA_BASE_URL=/media
+Environment=DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/drama_gen
+Environment=REDIS_URL=redis://localhost:6379/0
+# 关键：Linux 上用 prefork + concurrency=1，保证 GPU 任务串行
+# Windows 开发时才用 --pool=solo
+ExecStart=/opt/drama-gen/backend/.venv/bin/celery -A app.tasks.celery_app worker --loglevel=info --pool=prefork --concurrency=1
+Restart=always
+RestartSec=5
+# celery 停止时等待当前 GPU 任务完成（最长 15 分钟视频生成）
+TimeoutStopSec=900
+KillSignal=SIGTERM
+
+ReadWritePaths=/opt/drama-gen/data/media
+
+[Install]
+WantedBy=multi-user.target

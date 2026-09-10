@@ -106,45 +106,65 @@ class ComfyUIProvider:
 
     def generate_images(
         self, prompt: str, negative: str, count: int, width: int, height: int,
+        reference_image: Path | None = None,
     ) -> list[Path]:
-        """文生图（Z-Image-Turbo 模板）。返回下载到本地的图片路径列表。
+        """文生图。reference_image 不为空时走 FaceID 工作流（角色一致性），否则走纯文生图。"""
+        # 选择工作流模板
+        faceid_template = getattr(settings, "comfyui_image_faceid_workflow", None)
+        use_faceid = reference_image is not None and bool(faceid_template)
+        template_path = faceid_template if use_faceid else settings.comfyui_image_workflow
+        wf = self._load_template(template_path)
 
-        模板约定：workflow["3"] = CLIPTextEncode(正向)，workflow["4"] = 负向，
-        workflow["9"] = EmptyLatentImage(尺寸/batch)，workflow["KSampler"] 或
-        workflow["11"] = 采样器(种子)。具体节点号以你导出的 API json 为准，
-        可在 workflows/README.md 查看导出方法。
-        """
-        wf = self._load_template(settings.comfyui_image_workflow)
         seed = random.randint(0, 2**31)
         overrides: dict[str, dict] = {}
-        # 按节点类型自动注入参数，避免硬编码节点号（不同模板导出后编号不同）
-        clip_ids = []
-        for node_id, node in wf.items():
-            cls = node.get("class_type", "")
-            inputs = node.setdefault("inputs", {})
-            if cls == "CLIPTextEncode" and "text" in inputs:
-                clip_ids.append(node_id)
-            elif cls in ("EmptySD3LatentImage", "EmptyLatentImage"):
-                overrides[node_id] = {"width": width, "height": height, "batch_size": count}
-            elif cls in ("KSampler", "KSamplerAdvanced"):
-                overrides[node_id] = {"seed": seed}
-        # 正向/负向用 _meta.title 区分；识别不了则按连线顺序：先出现的为正向
-        pos = [i for i in clip_ids if "positive" in wf[i].get("_meta", {}).get("title", "").lower()
-               or "正向" in wf[i].get("_meta", {}).get("title", "")]
-        neg = [i for i in clip_ids if "negative" in wf[i].get("_meta", {}).get("title", "").lower()
-               or "负向" in wf[i].get("_meta", {}).get("title", "") or "负面" in wf[i].get("_meta", {}).get("title", "")]
-        if not pos and not neg and len(clip_ids) >= 2:
-            pos, neg = [clip_ids[0]], [clip_ids[1]]
-        for i in pos:
-            overrides[i] = {"text": prompt}
-        for i in neg:
-            overrides[i] = {"text": negative}
-        # Z-Image Turbo 等 CFG=1 工作流常用 ConditioningZeroOut 当负向：
-        # 此时只有一个 CLIPTextEncode，把负向提示词补进未分配的那个节点
-        if len(clip_ids) == 1 and negative:
-            only = clip_ids[0]
-            if only not in overrides:
-                overrides[only] = {"text": prompt}
+
+        if use_faceid:
+            # FaceID 路线：上传参考脸 → 注入 LoadImage 节点
+            img_name = self._upload_image(reference_image)
+            for node_id, node in wf.items():
+                cls = node.get("class_type", "")
+                inputs = node.setdefault("inputs", {})
+                if cls == "LoadImage":
+                    # 所有 LoadImage 都注入参考脸（FaceID 工作流里通常只有 1 个）
+                    overrides[node_id] = {"image": img_name}
+                elif cls in ("EmptySD3LatentImage", "EmptyLatentImage"):
+                    overrides[node_id] = {"width": width, "height": height, "batch_size": count}
+                elif cls in ("KSampler", "KSamplerAdvanced"):
+                    overrides[node_id] = {"seed": seed}
+                elif cls == "CLIPTextEncode" and "text" in inputs:
+                    title = node.get("_meta", {}).get("title", "").lower()
+                    if "negative" in title or "负向" in title or "负面" in title:
+                        overrides[node_id] = {"text": negative}
+                    else:
+                        overrides[node_id] = {"text": prompt}
+            logger.info("generate_images: FaceID workflow, ref=%s", img_name)
+        else:
+            # 纯文生图路线（Z-Image / SDXL Basic 通用）
+            clip_ids = []
+            for node_id, node in wf.items():
+                cls = node.get("class_type", "")
+                inputs = node.setdefault("inputs", {})
+                if cls == "CLIPTextEncode" and "text" in inputs:
+                    clip_ids.append(node_id)
+                elif cls in ("EmptySD3LatentImage", "EmptyLatentImage"):
+                    overrides[node_id] = {"width": width, "height": height, "batch_size": count}
+                elif cls in ("KSampler", "KSamplerAdvanced"):
+                    overrides[node_id] = {"seed": seed}
+            pos = [i for i in clip_ids if "positive" in wf[i].get("_meta", {}).get("title", "").lower()
+                   or "正向" in wf[i].get("_meta", {}).get("title", "")]
+            neg = [i for i in clip_ids if "negative" in wf[i].get("_meta", {}).get("title", "").lower()
+                   or "负向" in wf[i].get("_meta", {}).get("title", "") or "负面" in wf[i].get("_meta", {}).get("title", "")]
+            if not pos and not neg and len(clip_ids) >= 2:
+                pos, neg = [clip_ids[0]], [clip_ids[1]]
+            for i in pos:
+                overrides[i] = {"text": prompt}
+            for i in neg:
+                overrides[i] = {"text": negative}
+            if len(clip_ids) == 1 and negative:
+                only = clip_ids[0]
+                if only not in overrides:
+                    overrides[only] = {"text": prompt}
+
         wf = self._inject(wf, overrides)
 
         prompt_id = self._submit(wf)
@@ -158,40 +178,59 @@ class ComfyUIProvider:
         return images
 
     def generate_video(
-        self, first_frame: Path, motion_prompt: str, negative: str, duration: float,
+        self, first_frame: Path | None, motion_prompt: str, negative: str, duration: float,
+        t2v: bool = False,
     ) -> Path:
-        """图生视频（Wan2.1 I2V 模板）。上传首帧 → 提交 → 轮询 → 下载 mp4。"""
-        image_name = self._upload_image(first_frame)
-        wf = self._load_template(settings.comfyui_video_workflow)
+        """视频生成。t2v=True 时走文生视频（纯色图占位，Sampler 结构不变）。"""
+        from PIL import Image
+        import tempfile
+
+        t2v_template = getattr(settings, "comfyui_t2v_workflow", None)
+        use_t2v = t2v and bool(t2v_template)
+        template_path = t2v_template if use_t2v else settings.comfyui_video_workflow
+        wf = self._load_template(template_path)
         seed = random.randint(0, 2**31)
         length_frames = max(17, int(duration * 16) // 4 * 4 + 1)  # Wan 16fps, 帧数需 4n+1
         overrides: dict[str, dict] = {}
-        for node_id, node in wf.items():
-            cls = node.get("class_type", "")
-            inputs = node.setdefault("inputs", {})
-            # ---- 标准原生节点路线（官方 Wan 模板）----
-            if cls == "LoadImage":
-                overrides[node_id] = {"image": image_name}
-            elif cls == "CLIPTextEncode" and "text" in inputs:
-                title = node.get("_meta", {}).get("title", "").lower()
-                if "negative" in title or "负向" in title or "负面" in title:
-                    overrides[node_id] = {"text": negative}
-                else:
-                    overrides[node_id] = {"text": motion_prompt}
-            elif cls in ("KSampler", "KSamplerAdvanced"):
-                overrides[node_id] = {"seed": seed}
-            elif cls == "WanImageToVideo" or (cls.startswith("Empty") and "length" in inputs):
-                overrides[node_id] = {"length": length_frames}
-            # ---- WanVideoWrapper 路线（KJ 工作流，fp8+LightX2V 加速）----
-            elif cls == "WanVideoTextEncode":
-                overrides[node_id] = {
-                    "positive_prompt": motion_prompt,
-                    "negative_prompt": negative,
-                }
-            elif cls == "WanVideoSampler":
-                overrides[node_id] = {"seed": seed}
-            elif cls == "WanVideoImageToVideoEncode":
-                overrides[node_id] = {"num_frames": length_frames}
+
+        if use_t2v:
+            # ---- T2V：生成纯色占位图注入 LoadImage，其他节点结构与 I2V 完全一致 ----
+            logger.info("generate_video: T2V workflow, generating solid-color placeholder image")
+            placeholder = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            Image.new("RGB", (624, 352), color=(128, 128, 128)).save(placeholder.name)
+            placeholder.close()
+            image_name = self._upload_image(Path(placeholder.name))
+            for node_id, node in wf.items():
+                cls = node.get("class_type", "")
+                inputs = node.setdefault("inputs", {})
+                if cls == "LoadImage":
+                    overrides[node_id] = {"image": image_name}
+                elif cls == "WanVideoImageToVideoEncode":
+                    overrides[node_id] = {"num_frames": length_frames}
+                elif cls == "WanVideoTextEncode":
+                    overrides[node_id] = {
+                        "positive_prompt": motion_prompt,
+                        "negative_prompt": negative,
+                    }
+                elif cls == "WanVideoSampler":
+                    overrides[node_id] = {"seed": seed}
+        else:
+            # ---- I2V：需要首帧 ----
+            image_name = self._upload_image(first_frame)  # type: ignore[arg-type]
+            for node_id, node in wf.items():
+                cls = node.get("class_type", "")
+                inputs = node.setdefault("inputs", {})
+                if cls == "LoadImage":
+                    overrides[node_id] = {"image": image_name}
+                elif cls == "WanVideoTextEncode":
+                    overrides[node_id] = {
+                        "positive_prompt": motion_prompt,
+                        "negative_prompt": negative,
+                    }
+                elif cls == "WanVideoSampler":
+                    overrides[node_id] = {"seed": seed}
+                elif cls == "WanVideoImageToVideoEncode":
+                    overrides[node_id] = {"num_frames": length_frames}
         wf = self._inject(wf, overrides)
 
         prompt_id = self._submit(wf)

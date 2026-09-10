@@ -23,6 +23,8 @@ button {
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { background: #c0392b; border-color: #c0392b; color: #fff; }
+button.danger:hover { background: #e74c3c; border-color: #e74c3c; }
 
 input, textarea, select {
   background: var(--bg2); color: var(--text); border: 1px solid var(--border);

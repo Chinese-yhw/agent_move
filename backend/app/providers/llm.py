@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from openai import OpenAI
 
 from app.config import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 DETECT_PROMPT = """你是资深短剧制片与剧本审校。请检查下面的【剧本】与【分镜】，找出问题并输出 JSON。
@@ -56,6 +58,17 @@ TRANSLATE_PROMPT = """把下面的中文分镜画面描述翻译成 Wan 视频�
 
 中文描述：{description}
 运镜：{camera_movement}
+"""
+
+ASSET_PROMPT = """把下面的中文素材描述翻译成 SDXL 文生图用的英文提示词。
+规则：
+- 中文角色名直接保留拼音/原名（如 Lin Yuan 林渊）
+- 服装/发型/道具/场景等具体细节用英文准确描述
+- 风格词（如 东方玄幻/电影感/高细节）放到最后
+- 总长 30~80 英文单词，只输出提示词本身
+
+素材类型：{asset_type}
+中文描述：{description}
 """
 
 
@@ -109,6 +122,8 @@ STORYBOARD_PROMPT = """你是专业短剧分镜师。把下面的【剧本正文
 2. 每个镜头包含：shot_no(从1连续编号)、scene(场景名)、description(画面描述：谁在哪做什么，中文)、motion_prompt(英文视频提示词：只写动作+运镜+氛围，不超过30词，不写长相服装)、duration(秒)、camera_movement(运镜：固定/推近/拉远/跟拍/环绕/摇移等)、shot_size(景别：远景/全景/中景/近景/特写)、character_names(出场角色名数组)、dialogues(该镜头台词数组，每项{{"character":"说话人","text":"台词","emotion":"情绪"}}，无台词则空数组)
 3. 开场交代环境，对话用正反打，结尾留悬念钩子；相邻镜头景别要有变化
 4. 角色名、场景名必须与剧本一致，不要发明新角色
+5. emotion 必须按剧情起伏填写，不要全填"平静"。可选值：中性/高兴/悲伤/愤怒/惊讶/恐惧/低语/激动/紧张。示例：紧张追问用"紧张"，怒喝用"愤怒"，悲恸用"悲伤"，惊呼用"惊讶"，低声耳语用"低语"，急切催促用"激动"
+6. 台词精简到 1-2 句，符合 3-8 秒镜头节奏；旁白/字幕用 character="字幕"
 
 只输出 JSON：{{"shots": [...]}}
 
@@ -141,4 +156,15 @@ def translate_motion_prompt(description: str, camera_movement: str = "") -> str:
             description=description, camera_movement=camera_movement or "无特殊运镜"
         )).strip()
     except Exception:
+        return description
+
+
+def translate_asset_prompt(description: str, asset_type: str = "character") -> str:
+    """素材中文描述 → SDXL 英文提示词。失败则回退原文并打警告。"""
+    try:
+        return _chat(ASSET_PROMPT.format(
+            description=description, asset_type=asset_type
+        )).strip()
+    except Exception as exc:
+        logger.warning("translate_asset_prompt 失败（LLM API key 可能未配置），回退中文原文: %s", exc)
         return description

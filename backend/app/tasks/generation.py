@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -22,10 +23,11 @@ from app.models import (
 )
 from app.providers.comfyui import ComfyUIProvider
 from app.providers.llm import translate_motion_prompt
-from app.providers.tts import CosyVoiceProvider
+from app.providers.tts import get_tts_provider
 from app.services.compose import export_episode
 from app.tasks.celery_app import celery_app
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Celery 内用同步引擎（异步 ORM 只给 API 层用）
@@ -117,22 +119,33 @@ class _Heartbeat:
 
 @celery_app.task(bind=True, max_retries=1, default_retry_delay=30, on_failure=_on_failure)
 def generate_standard_images(self, task_id: int, asset_id: int, n: int, width: int, height: int):
-    """素材标准照抽卡：生成 N 张候选图。"""
+    """素材标准照抽卡：Z-Image-Turbo 中文原生底模，直接吃中文 prompt，无需 LLM 翻译。"""
+    from pathlib import Path as PPath
     with SyncSession() as db:
         asset = db.get(Asset, asset_id)
         if not asset:
             _mark(task_id, TaskStatus.failed, error=f"素材 id={asset_id} 不存在")
             return
         project = db.get(Project, asset.project_id)
-        style = project.style if project else "中性"
-        prompt = f"{style}风格，{asset.description}"
-        negative = "low quality, blurry, deformed, extra limbs, watermark, text"
+        style = project.style if project else "电影感"
+        # Z-Image-Turbo 中文原生底模，直接喂中文 prompt
+        prompt = f"{style}，{asset.description}"
+        logger.info("generate_standard_images: asset=%s, prompt=%s", asset.name, prompt)
+        negative = "低质量，模糊，变形，多余肢体，水印，文字，标志，最差质量"
+        # 参考脸：只有角色类型+有 reference_image URL 才走 FaceID（需要 SDXL 工作流）
+        ref_local: PPath | None = None
+        if asset.type == "character" and asset.reference_image:
+            ref_local = PPath(_url_to_path(asset.reference_image))
+            if not ref_local.exists():
+                logger.warning("参考脸图不存在 %s，退化为纯文生图", ref_local)
+                ref_local = None
 
     start = time.time()
     try:
         provider = ComfyUIProvider()
         with _Heartbeat(task_id, eta_seconds=n * 25):  # 4090 上约 20~30s/张
-            images = provider.generate_images(prompt, negative, n, width, height)
+            images = provider.generate_images(prompt, negative, n, width, height,
+                                              reference_image=ref_local)
     except Exception as exc:  # noqa: BLE001
         raise self.retry(exc=exc)
 
@@ -155,8 +168,10 @@ def generate_standard_images(self, task_id: int, asset_id: int, n: int, width: i
 
 
 @celery_app.task(bind=True, max_retries=1, default_retry_delay=60, on_failure=_on_failure)
-def generate_shot_videos(self, task_id: int, shot_id: int, n: int):
-    """镜头视频抽卡：首帧=关联角色/场景标准照，提示词=动作描述（必要时 LLM 翻译）。"""
+def generate_shot_videos(self, task_id: int, shot_id: int, n: int, force_t2v: bool = False):
+    """镜头视频抽卡：自动判断 I2V（有首帧）或 T2V（无首帧/特效镜头）。
+    提示词清洗：剥离"字幕/文字/字体/台词"等视频模型渲染不了的内容，
+    单独提取后存入 shot.subtitles 供后续叠层。"""
     with SyncSession() as db:
         shot = db.get(StoryboardShot, shot_id)
         first_frame_local = _pick_first_frame(db, shot)
@@ -165,11 +180,29 @@ def generate_shot_videos(self, task_id: int, shot_id: int, n: int):
             shot.motion_prompt = motion
         shot.status = ShotStatus.running
         duration = shot.duration
+
+        # ---- 字幕/文字/字体/台词剥离：视频模型渲染不了，必须去掉 ----
+        import re as _re
+        # 先删引号里的文字（字幕内容），再删"字幕：xxx"这种结构
+        cleaned_prompt = shot.description
+        # 删除「"xxx"」「"xxx"」引号内容
+        cleaned_prompt = _re.sub(r'[""][^""\n]{1,60}[""]', '', cleaned_prompt)
+        # 删除「字幕：xxx」「字幕浮现：xxx」「文字：xxx」等
+        for pat in [
+            r'[，,]?\s*字幕[^，。！？\n]{0,20}[：:][^。！？\n]*',
+            r'[，,]?\s*(?:文字|字体|画外音|旁白|台词)[^，。！？\n]{0,10}[：:][^。！？\n]*',
+        ]:
+            cleaned_prompt = _re.sub(pat, '', cleaned_prompt)
+        # 删关键词
+        for kw in ['字幕缓慢浮现', '字幕浮现', '字幕显示', '字幕', '字体', '台词', '文字', '旁白', '画外音']:
+            cleaned_prompt = cleaned_prompt.replace(kw, '')
+        # 删残留标点
+        cleaned_prompt = _re.sub(r'[，,。]{2,}', '。', cleaned_prompt).strip('，,。 ：:')
+        # 用清洗后的描述重新生成 motion_prompt
+        shot.motion_prompt = translate_motion_prompt(cleaned_prompt, shot.camera_movement)
         db.commit()
 
-    if first_frame_local is None or not first_frame_local.exists():
-        _mark(task_id, TaskStatus.failed, error="缺少首帧：请先为该镜头关联的角色/场景生成并锁定标准照")
-        return
+    use_t2v = force_t2v or first_frame_local is None or not first_frame_local.exists()
 
     negative = ("low quality, blurry, distorted face, deformed hands, watermark, text, "
                 "static image, no motion, flickering, changing face, different person")
@@ -177,19 +210,24 @@ def generate_shot_videos(self, task_id: int, shot_id: int, n: int):
     try:
         provider = ComfyUIProvider()
         videos = []
-        with _Heartbeat(task_id, eta_seconds=n * (duration * 12 + 60)):  # 480p i2v 经验值
-            for _ in range(max(1, n)):  # 多候选=多次提交（每次自动换种子）
-                videos.append(provider.generate_video(first_frame_local, motion, negative, duration))
+        eta_factor = 15 if use_t2v else 12
+        with _Heartbeat(task_id, eta_seconds=n * (duration * eta_factor + 60)):
+            for _ in range(max(1, n)):
+                videos.append(provider.generate_video(
+                    None if use_t2v else first_frame_local,
+                    motion, negative, duration, t2v=use_t2v,
+                ))
     except Exception as exc:  # noqa: BLE001
         raise self.retry(exc=exc)
 
+    model_label = "wan2.1-t2v-480p" if use_t2v else "wan2.1-i2v-480p"
     cost = _gpu_cost(time.time() - start)
     with SyncSession() as db:
         urls = []
         for v in videos:
             c = VideoCandidate(
                 shot_id=shot_id, video_url=_media_url(v), duration=duration,
-                prompt=motion, model="wan2.1-i2v-480p",
+                prompt=motion, model=model_label,
             )
             db.add(c)
             urls.append(c.video_url)
@@ -198,17 +236,17 @@ def generate_shot_videos(self, task_id: int, shot_id: int, n: int):
         _mark(task_id, TaskStatus.success, {"candidates": urls}, cost=cost)
 
 
-@celery_app.task(bind=True, max_retries=1, on_failure=_on_failure)
+@celery_app.task(bind=True, max_retries=2, on_failure=_on_failure)
 def generate_dialogue_audios(self, task_id: int, dialogue_ids: list[int]):
-    """批量配音：台词 → CosyVoice。"""
-    provider = CosyVoiceProvider()
+    """批量配音：CosyVoice（远程）或 edge-tts（本地兜底）。"""
+    provider = get_tts_provider()
     results, errors = {}, []
     start = time.time()
     with SyncSession() as db:
         rows = db.execute(select(Dialogue).where(Dialogue.id.in_(dialogue_ids))).scalars().all()
         char_names = {a.id: a.name for a in db.scalars(select(Asset)).unique()}
         for d in rows:
-            voice = d.voice_id or (char_names.get(d.character_id, "default"))
+            voice = d.voice_id or (char_names.get(d.character_id, d.speaker_name or "default"))
             try:
                 audio = provider.tts(d.text, voice_id=voice, emotion=d.emotion)
                 d.audio_url = _media_url(audio)

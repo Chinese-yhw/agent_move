@@ -80,6 +80,7 @@ export interface Asset {
   type: 'character' | 'scene' | 'prop' | string
   name: string
   description: string
+  reference_image: string | null
   standard_image: string | null
   status: string
 }

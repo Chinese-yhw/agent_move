@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import delete, func, select
@@ -436,6 +437,35 @@ async def upload_asset_list_txt(project_id: int, file: UploadFile = File(...),
                         cid = next((nid for nm, nid in char_by_name.items() if nm in d.speaker_name), None)
                     d.character_id = cid
 
+            # 为无关联镜头（黑屏/特效/空镜）自动创建场景素材，使其有首帧可用
+            existing_names = {a.name for a in project_assets}
+            for sh in shots:
+                has_ref = sh.character_ids or sh.scene_id
+                if has_ref:
+                    continue
+                # 用分镜描述作场景素材名和提示词
+                desc = (sh.description or "").strip()
+                if not desc:
+                    continue
+                name = f"镜{sh.shot_no}场景"
+                if name in existing_names:
+                    # 已有同名素材则直接关联
+                    a = next((x for x in project_assets if x.name == name), None)
+                    if a:
+                        sh.scene_id = a.id
+                    continue
+                a = Asset(
+                    project_id=project_id, type="scene", name=name,
+                    description=desc,
+                )
+                db.add(a)
+                await db.flush()
+                sh.scene_id = a.id
+                project_assets.append(a)
+                existing_names.add(name)
+                created += 1
+                linked_shots += 1
+
     await db.commit()
     return {"created": created, "parsed": parsed, "linked_shots": linked_shots}
 
@@ -544,6 +574,31 @@ async def update_asset(asset_id: int, req: AssetUpdate, db: AsyncSession = Depen
     return a
 
 
+@router.post("/assets/{asset_id}/reference-image", response_model=AssetOut)
+async def upload_reference_image(asset_id: int, file: UploadFile = File(...),
+                                 db: AsyncSession = Depends(get_db)):
+    """上传角色参考脸图（FaceID 用），存入 media/reference/ 目录，返回更新后的素材。"""
+    import uuid as _uuid
+    from app.config import get_settings as _gs
+    a = await db.get(Asset, asset_id)
+    if not a:
+        raise HTTPException(404)
+    if a.type != "character":
+        raise HTTPException(400, "只有角色类型素材可以上传参考脸图")
+    ext = (file.filename or ".png").split(".")[-1] or "png"
+    settings = _gs()
+    ref_dir = Path(settings.media_root) / "reference"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    fname = f"{_uuid.uuid4().hex[:12]}.{ext}"
+    fpath = ref_dir / fname
+    raw = await file.read()
+    fpath.write_bytes(raw)
+    a.reference_image = f"{settings.media_base_url}/reference/{fname}"
+    await db.commit()
+    await db.refresh(a)
+    return a
+
+
 @router.post("/assets/{asset_id}/images", response_model=TaskOut)
 async def gen_images(asset_id: int, req: GenerateImagesReq, db: AsyncSession = Depends(get_db)):
     a = await db.get(Asset, asset_id)
@@ -597,24 +652,26 @@ async def gen_video(shot_id: int, req: GenerateVideoReq, db: AsyncSession = Depe
     s = await db.get(StoryboardShot, shot_id)
     if not s:
         raise HTTPException(404)
-    # 提交前先校验首帧，避免任务跑起来才失败
-    script = await db.get(Script, s.script_id)
-    asset_rows = await db.execute(
-        select(Asset).where(Asset.project_id == script.project_id)
-    )
-    assets = {a.id: a for a in asset_rows.scalars().all()}
-    if _resolve_first_frame_id(s, assets) is None:
-        raise HTTPException(
-            400,
-            "该镜头还没有可用首帧：请先为关联角色/场景锁定标准照，或在下方手动选择一个素材作为首帧",
+    # T2V 模式跳过首帧校验
+    if not req.force_t2v:
+        script = await db.get(Script, s.script_id)
+        asset_rows = await db.execute(
+            select(Asset).where(Asset.project_id == script.project_id)
         )
+        assets = {a.id: a for a in asset_rows.scalars().all()}
+        if _resolve_first_frame_id(s, assets) is None:
+            raise HTTPException(
+                400,
+                "该镜头还没有可用首帧：请先为关联角色/场景锁定标准照，"
+                "或在下方手动选择一个素材作为首帧；也可以勾选「特效模式（文生视频）」直接生成",
+            )
     if req.duration:
         s.duration = min(max(req.duration, 3), 8)
     t = Task(type=TaskType.video, ref_id=shot_id)
     db.add(t)
     await db.commit()
     await db.refresh(t)
-    r = generate_shot_videos.delay(t.id, shot_id, req.n_candidates)
+    r = generate_shot_videos.delay(t.id, shot_id, req.n_candidates, force_t2v=req.force_t2v)
     t.celery_id = r.id
     await db.commit()
     return t
@@ -754,6 +811,67 @@ async def get_task(task_id: int, db: AsyncSession = Depends(get_db)):
     if not t:
         raise HTTPException(404)
     return t
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_task(task_id: int, db: AsyncSession = Depends(get_db)):
+    """取消正在执行的异步任务：给 Celery 发 revoke 信号 + 改 DB 状态。
+    注意：已经在 ComfyUI 跑的任务无法中断，会继续跑完，但 DB 状态会被标记 cancelled。"""
+    from app.tasks.celery_app import celery_app
+    t = await db.get(Task, task_id)
+    if not t:
+        raise HTTPException(404, "任务不存在")
+    if t.status in (TaskStatus.success, TaskStatus.failed, TaskStatus.cancelled):
+        raise HTTPException(400, f"任务已结束（{t.status.value}）")
+    # 给 Celery worker 发 revoke —— 如果还没开始会跳过，正在跑的会等当前步骤结束后停止
+    if t.celery_id:
+        celery_app.control.revoke(t.celery_id, terminate=False, signal='SIGTERM')
+    t.status = TaskStatus.cancelled
+    t.error = "用户取消"
+    from datetime import datetime
+    t.finished_at = datetime.utcnow()
+    await db.commit()
+    return {"ok": True, "status": "cancelled"}
+
+
+@router.delete("/candidates/images/{cid}")
+async def delete_image_candidate(cid: int, db: AsyncSession = Depends(get_db)):
+    """删除图片候选（+ 删磁盘文件）。"""
+    c = await db.get(ImageCandidate, cid)
+    if not c:
+        raise HTTPException(404, "候选不存在")
+    # 删磁盘文件
+    url = c.image_url or ""
+    local = url.replace("/media/", "")
+    local_path = Path(__file__).resolve().parents[2] / "media" / local
+    if local_path.exists():
+        try:
+            local_path.unlink()
+        except Exception:
+            pass
+    await db.delete(c)
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/candidates/videos/{cid}")
+async def delete_video_candidate(cid: int, db: AsyncSession = Depends(get_db)):
+    """删除视频候选（+ 删磁盘文件）。"""
+    c = await db.get(VideoCandidate, cid)
+    if not c:
+        raise HTTPException(404, "候选不存在")
+    # 删磁盘文件
+    url = c.video_url or ""
+    local = url.replace("/media/", "")
+    local_path = Path(__file__).resolve().parents[2] / "media" / local
+    if local_path.exists():
+        try:
+            local_path.unlink()
+        except Exception:
+            pass
+    await db.delete(c)
+    await db.commit()
+    return {"ok": True}
 
 
 @router.get("/projects/{project_id}/costs")

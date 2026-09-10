@@ -18,10 +18,12 @@ class Settings(BaseSettings):
     # ComfyUI（AutoDL）
     comfyui_base_url: str = ""
     comfyui_image_workflow: str = "workflows/z_image_turbo_api.json"
+    comfyui_image_faceid_workflow: str | None = "workflows/sdxl_ipa_faceid_api.json"
     comfyui_video_workflow: str = "workflows/wan21_i2v_api.json"
-    comfyui_poll_interval: float = 3.0      # 轮询间隔（秒）
-    comfyui_image_timeout: int = 600        # 文生图超时
-    comfyui_video_timeout: int = 3600       # 图生视频超时
+    comfyui_t2v_workflow: str | None = "workflows/wan21_t2v_api.json"
+    comfyui_poll_interval: float = 2.0      # 轮询间隔（秒）
+    comfyui_image_timeout: int = 180        # 文生图超时（Z-Image 正常 30-60s，3 分钟足够）
+    comfyui_video_timeout: int = 900        # 图生视频超时（Wan2.1 正常 1-3 分钟，15 分钟足够）
 
     # LLM
     llm_api_key: str = ""

@@ -3,7 +3,9 @@ import type {
   Asset, Costs, Dialogue, ImageCandidate, Issue, Project, Script, Shot, ShotInput, ShotRef, Task, VideoCandidate,
 } from './types'
 
-export const API_BASE = import.meta.env.DEV ? '' : 'http://localhost:8000'
+// 开发时走 vite proxy（空字符串），生产时也走同源（nginx 反代 /api /media 到后端）
+// 这样前端构建一次，部署到任何域名都能工作
+export const API_BASE = ''
 
 async function req<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -82,6 +84,8 @@ export const deleteScript = (scriptId: number) =>
 export const detectScript = (scriptId: number) => req<Task>(`/api/scripts/${scriptId}/detect`, { method: 'POST' })
 export const extractAssets = (scriptId: number) => req<Task>(`/api/scripts/${scriptId}/extract`, { method: 'POST' })
 export const getTask = (taskId: number) => req<Task>(`/api/tasks/${taskId}`)
+/** 取消正在执行的异步任务（Celery revoke + 改 DB 状态）。已经在 ComfyUI 跑的无法中断，会继续跑完 */
+export const cancelTask = (taskId: number) => req<{ ok: boolean; status: string }>(`/api/tasks/${taskId}/cancel`, { method: 'POST' })
 /** 查询某对象（type+refId）当前未结束的任务：切页/刷新回来后恢复进度条 */
 export const getActiveTask = (type: string, refId: number) =>
   req<Task>(`/api/tasks/active?type=${encodeURIComponent(type)}&ref_id=${refId}`)
@@ -98,6 +102,12 @@ export const uploadAssetListTxt = (projectId: number, file: File, scriptId?: num
 }
 export const updateAsset = (assetId: number, description: string) =>
   req<Asset>(`/api/assets/${assetId}`, { method: 'PATCH', body: JSON.stringify({ description }) })
+/** 上传角色参考脸图（FaceID 用）。只有 character 类型素材可用。 */
+export const uploadReferenceImage = (assetId: number, file: File) => {
+  const form = new FormData()
+  form.append('file', file)
+  return reqForm<Asset>(`/api/assets/${assetId}/reference-image`, form)
+}
 
 // ---------- 标准照 ----------
 export const genImages = (assetId: number, n = 4, width = 832, height = 480) =>
@@ -109,14 +119,21 @@ export const selectStandard = (assetId: number, candidateId: number) =>
     method: 'POST',
     body: JSON.stringify({ candidate_id: candidateId }),
   })
+export const deleteImageCandidate = (candidateId: number) =>
+  req<{ ok: boolean }>(`/api/candidates/images/${candidateId}`, { method: 'DELETE' })
 
 // ---------- 镜头视频 ----------
-export const genVideo = (shotId: number, n = 2) =>
-  req<Task>(`/api/shots/${shotId}/videos`, { method: 'POST', body: JSON.stringify({ n_candidates: n }) })
+export const genVideo = (shotId: number, n = 2, duration?: number, force_t2v = false) =>
+  req<Task>(`/api/shots/${shotId}/videos`, {
+    method: 'POST',
+    body: JSON.stringify({ n_candidates: n, duration, force_t2v }),
+  })
 export const listVideoCandidates = (shotId: number) =>
   req<VideoCandidate[]>(`/api/shots/${shotId}/candidates`)
 export const approveVideo = (shotId: number, candidateId: number) =>
   req<{ ok: boolean }>(`/api/shots/${shotId}/approve`, { method: 'POST', body: JSON.stringify({ candidate_id: candidateId }) })
+export const deleteVideoCandidate = (candidateId: number) =>
+  req<{ ok: boolean }>(`/api/candidates/videos/${candidateId}`, { method: 'DELETE' })
 /** 镜头页选首帧用：剧本所属项目的全部素材 */
 export const listScriptAssets = (scriptId: number) => req<Asset[]>(`/api/scripts/${scriptId}/assets`)
 /** 手动指定镜头首帧（assetId=null 恢复自动选取） */

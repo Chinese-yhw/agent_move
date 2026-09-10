@@ -1,7 +1,7 @@
 /** 标准照页：素材卡片 + 抽卡生成候选图 + 选定标准照锁定 */
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { genImages, listAssets, listImageCandidates, selectStandard } from '../api'
+import { cancelTask, deleteImageCandidate, genImages, listAssets, listImageCandidates, selectStandard, uploadReferenceImage } from '../api'
 import { ErrBox, Lightbox, TaskBar } from '../components'
 import { usePollTask } from '../usePollTask'
 import type { Asset, ImageCandidate } from '../types'
@@ -34,6 +34,7 @@ function AssetCard({ asset: a, onChanged }: { asset: Asset; onChanged: () => voi
   const [taskId, setTaskId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [zoom, setZoom] = useState<string | null>(null)
+  const [refBusy, setRefBusy] = useState(false)
   const { task, polling } = usePollTask(taskId, `image:${a.id}`)
 
   const loadCands = () =>
@@ -80,6 +81,37 @@ function AssetCard({ asset: a, onChanged }: { asset: Asset; onChanged: () => voi
              onClick={e => { e.stopPropagation(); setZoom(a.standard_image!) }} />
       )}
 
+      {/* 角色专属：参考脸（FaceID） */}
+      {a.type === 'character' && (
+        <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+          {a.reference_image ? (
+            <>
+              <img src={a.reference_image} alt="参考脸"
+                   style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 4, border: '2px solid #4f8cff' }}
+                   onClick={e => { e.stopPropagation(); setZoom(a.reference_image!) }}
+                   title="参考脸（点击放大）" />
+              <span className="muted" style={{ fontSize: 12 }}>参考脸已上传 · 生成时走 FaceID 一致性</span>
+            </>
+          ) : (
+            <>
+              <input type="file" accept="image/*" id={`ref-${a.id}`} style={{ display: 'none' }}
+                     onChange={async e => {
+                       const file = e.target.files?.[0]
+                       if (!file) return
+                       setRefBusy(true); setError(null)
+                       try { await uploadReferenceImage(a.id, file); await onChanged() }
+                       catch (err: any) { setError(err.message) }
+                       finally { setRefBusy(false); e.target.value = '' }
+                     }} />
+              <label htmlFor={`ref-${a.id}`} style={{ cursor: refBusy ? 'not-allowed' : 'pointer' }}>
+                <span className="badge yellow" style={{ cursor: 'pointer' }}>➕ 上传参考脸</span>
+              </label>
+              <span className="muted" style={{ fontSize: 12 }}>不上传也能生成（纯 SDXL 文生图）</span>
+            </>
+          )}
+        </div>
+      )}
+
       <ErrBox error={error || (task?.status === 'failed' ? task.error : null)} />
       <TaskBar task={task} polling={polling} label="候选图生成（约 1~2 分钟）" />
 
@@ -93,6 +125,10 @@ function AssetCard({ asset: a, onChanged }: { asset: Asset; onChanged: () => voi
                 {c.is_selected
                   ? <span className="badge green">已选定</span>
                   : <button onClick={e => { e.stopPropagation(); pick(c.id) }}>设为标准照</button>}
+                <button className="danger" style={{ marginLeft: 6 }}
+                        onClick={async e => { e.stopPropagation();
+                          try { await deleteImageCandidate(c.id); await loadCands() } catch (err: any) { setError(err.message) }
+                        }}>🗑</button>
               </figcaption>
             </figure>
           ))}
@@ -102,6 +138,11 @@ function AssetCard({ asset: a, onChanged }: { asset: Asset; onChanged: () => voi
         <button className="primary" disabled={polling} onClick={e => { e.stopPropagation(); generate() }}>
           {polling ? '生成中…' : '生成候选 ×4'}
         </button>
+        {polling && taskId && (
+          <button className="danger" onClick={async e => { e.stopPropagation();
+            try { await cancelTask(taskId); setTaskId(null) } catch (err: any) { setError(err.message) }
+          }}>⛔ 取消</button>
+        )}
         <button onClick={e => { e.stopPropagation(); loadCands() }}>查看候选</button>
       </div>
 

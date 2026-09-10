@@ -1,7 +1,7 @@
 /** 镜头页：分镜列表 + 首帧（标准照）选择 + 视频抽卡生成 + 候选审核通过 */
 import { useEffect, useState } from 'react'
 import {
-  approveVideo, genVideo, listScriptAssets, listShots, listVideoCandidates, setShotFirstFrame,
+  approveVideo, cancelTask, deleteVideoCandidate, genVideo, listScriptAssets, listShots, listVideoCandidates, setShotFirstFrame,
 } from '../api'
 import { ErrBox, ScriptSelector, TaskBar, useScriptId } from '../components'
 import { usePollTask } from '../usePollTask'
@@ -47,10 +47,12 @@ export default function ShotsPage() {
  *  切到别的页面再回来，进度条会从 localStorage / 后端任务恢复 */
 function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[]; onChanged: () => void }) {
   const [cands, setCands] = useState<VideoCandidate[] | null>(null)
-  const [taskId, setTaskId] = useState<number | null>(null)
   const [open, setOpen] = useState(false)
+  const [taskId, setTaskId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [zoom, setZoom] = useState<string | null>(null)
   const [frameBusy, setFrameBusy] = useState(false)
+  const [useT2V, setUseT2V] = useState(false)
   const { task, polling } = usePollTask(taskId, `video:${s.id}`)
 
   // 当前生效首帧：手动指定优先，否则 refs 中 is_first_frame 的那个（后端自动选取）
@@ -88,7 +90,7 @@ function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[];
   const generate = async () => {
     setError(null)
     try {
-      const t = await genVideo(s.id, 2)
+      const t = await genVideo(s.id, 2, undefined, useT2V)
       setTaskId(t.id)
       setOpen(true)
     } catch (e: any) {
@@ -112,13 +114,29 @@ function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[];
         <span className={`badge ${STATUS_BADGE[s.status] ?? 'gray'}`}>{s.status}</span>
         <span className="muted">{s.scene} · {s.shot_size} · {s.camera_movement} · {s.duration}s</span>
         <span style={{ flex: 1 }} />
-        <button className="primary" disabled={polling || frameBusy} onClick={generate}>
+        <button className="primary" disabled={polling} onClick={generate}>
           {polling ? '生成中…' : '生成视频 ×2'}
         </button>
+        {polling && taskId && (
+          <button className="danger" onClick={async () => {
+            try { await cancelTask(taskId); setTaskId(null); } catch (e: any) { setError(e.message) }
+          }}>
+            ⛔ 取消
+          </button>
+        )}
+        <label style={{ marginLeft: 8, fontSize: 12, cursor: 'pointer' }}>
+          <input type="checkbox" checked={useT2V} onChange={e => setUseT2V(e.target.checked)} />
+          <span style={{ marginLeft: 4 }}>🎬 特效模式（文生视频，跳过首帧）</span>
+        </label>
         <button onClick={() => { setOpen(!open); loadCands() }}>
           {open ? '收起候选' : '查看候选'}
         </button>
       </div>
+      {!hasFirstFrame && !useT2V && (
+        <div style={{ color: '#e09050', fontSize: 12, marginTop: 4 }}>
+          ⚠️ 该镜头无首帧，未勾选特效模式会被拒绝生成
+        </div>
+      )}
       <div className="desc">{s.description}</div>
 
       {/* 关联素材与首帧 */}
@@ -174,12 +192,15 @@ function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[];
             <div key={c.id}>
               <video src={c.video_url} controls preload="metadata" />
               <div className="cand-actions">
-                <span className={`badge ${c.status === 'approved' ? 'green' : c.status === 'rejected' ? 'red' : 'gray'}`}>
-                  {c.status === 'approved' ? '已通过' : c.status === 'rejected' ? '已淘汰' : '待审核'}
+                <span className={`badge ${c.status === '通过' ? 'green' : c.status === '淘汰' ? 'red' : 'gray'}`}>
+                  {c.status === '通过' ? '已通过' : c.status === '淘汰' ? '已淘汰' : '待审核'}
                 </span>
-                {c.status !== 'approved' && (
+                {c.status !== '通过' && (
                   <button className="primary" onClick={() => approve(c.id)}>通过</button>
                 )}
+                <button className="danger" onClick={async () => {
+                  try { await deleteVideoCandidate(c.id); await loadCands(); } catch (e: any) { setError(e.message) }
+                }}>🗑 删除</button>
               </div>
             </div>
           ))}

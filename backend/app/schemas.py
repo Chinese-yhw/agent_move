@@ -122,6 +122,7 @@ class SelectCandidateReq(BaseModel):
 class GenerateVideoReq(BaseModel):
     n_candidates: int = 2          # 每镜头候选数（控成本默认 2）
     duration: float | None = None  # 覆盖分镜时长
+    force_t2v: bool = False        # 强制文生视频（忽略首帧检查）
 
 
 class ApproveVideoReq(BaseModel):
