@@ -1,4 +1,6 @@
 # Python虚拟环境
 venv/
 .venv/
-env/
+env/backend/.venv/
+.venv/
+.venv/
