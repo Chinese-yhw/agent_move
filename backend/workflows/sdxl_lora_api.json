@@ -1,0 +1,88 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 251622424529302,
+      "steps": 8,
+      "cfg": 5.0,
+      "sampler_name": "dpmpp_sde",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": ["21", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["5", 0]
+    },
+    "class_type": "KSampler",
+    "_meta": { "title": "K采样器" }
+  },
+  "4": {
+    "inputs": {
+      "ckpt_name": "dreamshaperXL_lightningDPMSDE.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": { "title": "Checkpoint加载器（简易）" }
+  },
+  "5": {
+    "inputs": {
+      "width": 768,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": { "title": "空Latent图像" }
+  },
+  "6": {
+    "inputs": {
+      "text": "1girl",
+      "clip": ["21", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "正向提示词" }
+  },
+  "7": {
+    "inputs": {
+      "text": "text, watermark",
+      "clip": ["21", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "负向提示词" }
+  },
+  "8": {
+    "inputs": {
+      "samples": ["3", 0],
+      "vae": ["4", 2]
+    },
+    "class_type": "VAEDecode",
+    "_meta": { "title": "VAE解码" }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "lora-shot",
+      "images": ["8", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": { "title": "保存图像" }
+  },
+  "20": {
+    "inputs": {
+      "lora_name": "None",
+      "strength_model": 0.9,
+      "strength_clip": 0.9,
+      "model": ["4", 0],
+      "clip": ["4", 1]
+    },
+    "class_type": "LoraLoader",
+    "_meta": { "title": "角色LoRA #1" }
+  },
+  "21": {
+    "inputs": {
+      "lora_name": "None",
+      "strength_model": 0.9,
+      "strength_clip": 0.9,
+      "model": ["20", 0],
+      "clip": ["20", 1]
+    },
+    "class_type": "LoraLoader",
+    "_meta": { "title": "角色LoRA #2" }
+  }
+}

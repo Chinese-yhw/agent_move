@@ -1,13 +1,16 @@
 dev环境47.93.28.142  csp
 test环境39.105.5.252   csp_django
+sed -i 's/\r$//' /home/cis/work/EGPT2026/Src/auth_center/start.sh   去掉回车换行
+
 
 二次需求需要的包
 1.安装libreoffice
 
+
 sudo apt update
 sudo apt install libreoffice
-
-
+Yhw123..
+yhw_20000105@163.com
 .\.venv\Scripts\celery -A app.tasks.celery_app.celery_app worker --loglevel=info --pool=solo
 需要把字体弄到user/local/share/font
 

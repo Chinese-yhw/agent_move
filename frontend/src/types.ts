@@ -85,8 +85,11 @@ export interface Asset {
   type: 'character' | 'scene' | 'prop' | string
   name: string
   description: string
+  identity_anchor: string
   reference_image: string | null
   standard_image: string | null
+  lora_name: string | null
+  lora_strength: number
   status: string
 }
 

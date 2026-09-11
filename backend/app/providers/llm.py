@@ -39,10 +39,14 @@ EXTRACT_PROMPT = """你是短剧美术指导。从下面的【剧本】与【分
 - 角色需给出 gender、age、costume（主要服装）
 - 场景给出 time_of_day（白天/夜晚/傍晚…）
 - 不要遗漏只在台词中提到的道具
+- 【关键·视觉锚点 identity_anchor】为每个角色和场景额外生成一段「全剧不可变的身份锚点」，必须是英文，用于跨镜头强制保持同一形象：
+  * 角色锚点格式参考："fictional adult woman, oval face, wide-set dark brown eyes, short wavy black bob, small mole below left eye, warm medium skin, plain teal ancient robe" —— 只写【恒定不变的身份特征】：性别年龄段、脸型、眼睛、发型发色、标志物、固定服装；不要写表情/动作/背景/光线
+  * 场景锚点格式参考："ancient chinese stone martial-arts courtyard, grey flagstone ground, carved stone archway, mountain backdrop, wooden banners" —— 只写该场景【恒定的建筑/地貌/物件特征】
+  * 锚点要具体到可识别的细节（颜色、形状、位置），这是"下一集还认得出"的关键
 
 只输出 JSON：
-{{"characters": [{{"name":"","gender":"","age":"","appearance":"","costume":"","personality":""}}],
- "scenes": [{{"name":"","description":"","time_of_day":""}}],
+{{"characters": [{{"name":"","gender":"","age":"","appearance":"","costume":"","personality":"","identity_anchor":""}}],
+ "scenes": [{{"name":"","description":"","time_of_day":"","identity_anchor":""}}],
  "props": [{{"name":"","description":""}}]}}
 
 【剧本】

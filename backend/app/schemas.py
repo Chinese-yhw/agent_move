@@ -110,13 +110,25 @@ class AssetOut(ORMModel):
     type: str
     name: str
     description: str
+    identity_anchor: str = ""
     standard_image: str | None
+    lora_name: str | None = None
+    lora_strength: float = 0.9
     status: str
 
 
 class AssetUpdate(BaseModel):
     description: str | None = None
+    identity_anchor: str | None = None
     reference_image: str | None = None
+    lora_name: str | None = None
+    lora_strength: float | None = None
+
+
+class SetLoraReq(BaseModel):
+    """直接指定 ComfyUI models/loras/ 下的 LoRA 文件名（已在 GPU 端放好）。"""
+    lora_name: str
+    strength: float = 0.9
 
 
 class GenerateImagesReq(BaseModel):

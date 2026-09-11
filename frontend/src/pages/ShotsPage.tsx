@@ -1,7 +1,7 @@
 /** 镜头页：分镜列表 + 首帧图生成（image_prompt + IP-Adapter）+ 视频抽卡 + 候选审核 */
 import { useEffect, useState } from 'react'
 import {
-  approveVideo, cancelTask, deleteVideoCandidate, deleteShot, genVideo, listScriptAssets, listShots, listVideoCandidates, setShotFirstFrame,
+  approveVideo, cancelTask, deleteVideoCandidate, deleteImageCandidate, deleteShot, genVideo, listScriptAssets, listShots, listVideoCandidates, setShotFirstFrame,
   genShotImages, listShotImages, selectShotImage,
   type ShotImageCand,
 } from '../api'
@@ -205,6 +205,21 @@ function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[];
           <span className="badge green">已选首帧</span>
           <img src={s.first_frame_image} alt="镜头首帧" style={{ width: 160, borderRadius: 4 }} />
           <span className="muted" style={{ fontSize: 12 }}>此图作为视频 I2V 的首帧</span>
+          <button className="danger" style={{ padding: '2px 8px', fontSize: 12 }} title="删除当前首帧图"
+            onClick={async () => {
+              if (!window.confirm('确定删除这张首帧图？删除后该镜头将没有专属首帧。')) return
+              try {
+                const sel = (imgCands ?? []).find(c => c.is_selected)
+                  ?? (imgCands ?? []).find(c => c.image_url === s.first_frame_image)
+                if (sel) {
+                  await deleteImageCandidate(sel.id)
+                } else {
+                  // 首帧不是候选图（如直接引用的标准照/历史数据）：清空镜头首帧指定
+                  await setShotFirstFrame(s.id, null)
+                }
+                await Promise.all([loadImgCands(), onChanged()])
+              } catch (e: any) { setError(e.message) }
+            }}>🗑 删除首帧</button>
         </div>
       )}
 
@@ -220,6 +235,11 @@ function ShotCard({ shot: s, assets, onChanged }: { shot: Shot; assets: Asset[];
                   disabled={c.is_selected} onClick={() => pickImage(c.id)}>
                   {c.is_selected ? '已选' : '选为首帧'}
                 </button>
+                <button className="danger" style={{ padding: '2px 6px', fontSize: 11 }} title="删除此候选图"
+                  onClick={async () => {
+                    if (!window.confirm('确定删除这张首帧候选图？')) return
+                    try { await deleteImageCandidate(c.id); await loadImgCands(); } catch (e: any) { setError(e.message) }
+                  }}>🗑</button>
               </div>
             </div>
           ))}

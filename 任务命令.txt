@@ -15,3 +15,29 @@ npm run dev   前端
 🔊 配音页 → 点「批量配音」
     ↓
 📦 合成页 → 点「合成整集
+
+下载plus模型地址
+wget -O /root/autodl-tmp/ComfyUI/models/ipadapter/ip-adapter-plus_sdxl_vit-h.safetensors "https://hf-mirror.com/h94/IP-Adapter/resolve/main/sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors"
+
+查看是否下载完
+ls -lh /root/autodl-tmp/ComfyUI/models/ipadapter/ip-adapter-plus_sdxl_vit-h.safetensors
+
+
+上传顺序（按平台最短路径）
+新建项目：画风选 写实电影感。
+
+📋 剧本页：新建剧本 → 粘贴小说正文 → 上传 第一部分_分镜表.txt → 批量提交。
+
+📋 剧本页：上传 第一部分_提示词.csv。
+
+🔍 检测页：可选，点一次检测。
+
+🧩 素材页：上传 第一部分_素材清单.txt，锚点自动入库。
+
+🖼 标准照页：给林澈、Echo、深夜公寓等主要资产生成候选 ×4 → 各锁一张标准照。
+
+🎬 镜头页：逐镜生成首帧 ×2 → 选首帧 → 生成视频 ×2 → 通过。
+
+🔊 配音页：批量配音。
+
+🎞 合成页：导出成片。

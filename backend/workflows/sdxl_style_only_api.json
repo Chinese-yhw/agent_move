@@ -1,0 +1,98 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 251622424529302,
+      "steps": 8,
+      "cfg": 5.0,
+      "sampler_name": "dpmpp_sde",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": ["18", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["5", 0]
+    },
+    "class_type": "KSampler",
+    "_meta": { "title": "K采样器" }
+  },
+  "4": {
+    "inputs": {
+      "ckpt_name": "dreamshaperXL_lightningDPMSDE.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": { "title": "Checkpoint加载器（简易）" }
+  },
+  "5": {
+    "inputs": {
+      "width": 768,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": { "title": "空Latent图像" }
+  },
+  "6": {
+    "inputs": {
+      "text": "1girl",
+      "clip": ["4", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "正向提示词" }
+  },
+  "7": {
+    "inputs": {
+      "text": "text, watermark",
+      "clip": ["4", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "负向提示词" }
+  },
+  "8": {
+    "inputs": {
+      "samples": ["3", 0],
+      "vae": ["4", 2]
+    },
+    "class_type": "VAEDecode",
+    "_meta": { "title": "VAE解码" }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "z-image",
+      "images": ["8", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": { "title": "保存图像" }
+  },
+  "17": {
+    "inputs": {
+      "preset": "PLUS (high strength)",
+      "lora_strength": "auto",
+      "provider": "CPU",
+      "model": ["4", 0]
+    },
+    "class_type": "IPAdapterUnifiedLoader",
+    "_meta": { "title": "IPAdapter Loader 全风格 PLUS" }
+  },
+  "18": {
+    "inputs": {
+      "weight": 0.85,
+      "weight_type": "style transfer",
+      "combine_embeds": "concat",
+      "start_at": 0.0,
+      "end_at": 1.0,
+      "embeds_scaling": "V only",
+      "model": ["17", 0],
+      "ipadapter": ["17", 1],
+      "image": ["19", 0]
+    },
+    "class_type": "IPAdapterAdvanced",
+    "_meta": { "title": "IPAdapter Advanced（锁服装画风）" }
+  },
+  "19": {
+    "inputs": {
+      "image": "placeholder_scene.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": { "title": "整体标准照（锁风格）" }
+  }
+}

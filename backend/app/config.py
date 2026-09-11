@@ -18,7 +18,11 @@ class Settings(BaseSettings):
     # ComfyUI（AutoDL）
     comfyui_base_url: str = ""
     comfyui_image_workflow: str = "workflows/z_image_turbo_api.json"
-    comfyui_image_faceid_workflow: str | None = "workflows/sdxl_ipa_faceid_api.json"
+    # SDXL + 角色 LoRA（专业级一致性，优先于 IP-Adapter）
+    comfyui_image_lora_workflow: str | None = "workflows/sdxl_lora_api.json"
+    comfyui_image_faceid_workflow: str | None = "workflows/sdxl_dual_ipa_api.json"
+    # 仅全风格 IP-Adapter（FaceID 检测不到人脸时的降级工作流）
+    comfyui_image_style_workflow: str | None = "workflows/sdxl_style_only_api.json"
     comfyui_video_workflow: str = "workflows/wan21_i2v_api.json"
     comfyui_t2v_workflow: str | None = "workflows/wan21_t2v_api.json"
     comfyui_poll_interval: float = 2.0      # 轮询间隔（秒）

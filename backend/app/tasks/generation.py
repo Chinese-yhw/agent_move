@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
 from app.models import (
-    Asset, Dialogue, ImageCandidate, Project, StoryboardShot, Task,
+    Asset, Dialogue, ImageCandidate, Project, Script, StoryboardShot, Task,
     TaskStatus, TaskType, VideoCandidate, ShotStatus, CandidateStatus,
 )
 from app.providers.comfyui import ComfyUIProvider
@@ -128,8 +128,12 @@ def generate_standard_images(self, task_id: int, asset_id: int, n: int, width: i
             return
         project = db.get(Project, asset.project_id)
         style = project.style if project else "电影感"
-        # Z-Image-Turbo 中文原生底模，直接喂中文 prompt
-        prompt = f"{style}，{asset.description}"
+        # Z-Image-Turbo 中文原生底模，直接喂中文 prompt；有身份锚点则一并强制注入
+        anchor = (asset.identity_anchor or "").strip()
+        if anchor:
+            prompt = f"{style}，{anchor}，{asset.description}"
+        else:
+            prompt = f"{style}，{asset.description}"
         logger.info("generate_standard_images: asset=%s, prompt=%s", asset.name, prompt)
         negative = "低质量，模糊，变形，多余肢体，水印，文字，标志，最差质量"
         # 参考脸：只有角色类型+有 reference_image URL 才走 FaceID（需要 SDXL 工作流）
@@ -189,24 +193,43 @@ def generate_shot_images(self, task_id: int, shot_id: int, n: int, width: int, h
         if not prompt:
             _mark(task_id, TaskStatus.failed, error="该镜头没有 image_prompt 也没有 description，无法生图")
             return
-        full_prompt = f"{style}，{prompt}"
-        negative = shot.negative_prompt or "低质量，模糊，变形，多余肢体，水印，文字，最差质量"
-        logger.info("generate_shot_images: shot=%s, prompt=%s", shot.shot_no, full_prompt[:100])
 
-        # 收集 IP-Adapter 参考图：关联角色的标准照 + 场景标准照
+        # 收集 IP-Adapter 参考图 + 视觉锚点（identity_anchor）
+        # 工业做法：身份锚点全剧不可变，强制拼在每个镜头 prompt 前面，保证"下一集还认得出"
         ref_images: list[PPath] = []
+        loras: list[tuple[str, float]] = []
+        anchors: list[str] = []          # 角色+场景的身份锚点（英文）
         for cid in (shot.character_ids or []):
             a = db.get(Asset, cid)
-            if a and a.standard_image:
+            if not a:
+                continue
+            if a.lora_name:
+                loras.append((a.lora_name, a.lora_strength or 0.9))
+            if a.identity_anchor:
+                anchors.append(a.identity_anchor.strip())
+            if a.standard_image:
                 p = PPath(_url_to_path(a.standard_image))
                 if p.exists():
                     ref_images.append(p)
         if shot.scene_id:
             a = db.get(Asset, shot.scene_id)
-            if a and a.standard_image:
-                p = PPath(_url_to_path(a.standard_image))
-                if p.exists():
-                    ref_images.append(p)
+            if a:
+                if a.identity_anchor:
+                    anchors.append(a.identity_anchor.strip())
+                if a.standard_image:
+                    p = PPath(_url_to_path(a.standard_image))
+                    if p.exists():
+                        ref_images.append(p)
+
+        # 组装最终 prompt：风格 + 身份锚点(不可变) + 本镜动作/环境(可变)
+        anchor_block = ", ".join(dict.fromkeys(anchors))  # 去重保序
+        if anchor_block:
+            full_prompt = f"{style}，{anchor_block}，{prompt}"
+        else:
+            full_prompt = f"{style}，{prompt}"
+        negative = shot.negative_prompt or "低质量，模糊，变形，多余肢体，水印，文字，最差质量"
+        logger.info("generate_shot_images: shot=%s, anchors=%d, prompt=%s",
+                    shot.shot_no, len(anchors), full_prompt[:160])
 
     start = time.time()
     try:
@@ -215,6 +238,7 @@ def generate_shot_images(self, task_id: int, shot_id: int, n: int, width: int, h
             images = provider.generate_images(
                 full_prompt, negative, n, width, height,
                 reference_images=ref_images if ref_images else None,
+                loras=loras if loras else None,
             )
     except Exception as exc:
         raise self.retry(exc=exc)

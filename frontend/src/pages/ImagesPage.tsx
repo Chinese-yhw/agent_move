@@ -1,7 +1,7 @@
 /** 标准照页：素材卡片 + 抽卡生成候选图 + 选定标准照锁定 */
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { cancelTask, deleteImageCandidate, genImages, listAssets, listImageCandidates, selectStandard, uploadReferenceImage } from '../api'
+import { cancelTask, deleteImageCandidate, genImages, listAssets, listImageCandidates, selectStandard, setAssetLora, uploadReferenceImage } from '../api'
 import { ErrBox, Lightbox, ScriptSelector, TaskBar, useScriptId } from '../components'
 import { usePollTask } from '../usePollTask'
 import type { Asset, ImageCandidate } from '../types'
@@ -43,6 +43,9 @@ function AssetCard({ asset: a, onChanged }: { asset: Asset; onChanged: () => voi
   const [error, setError] = useState<string | null>(null)
   const [zoom, setZoom] = useState<string | null>(null)
   const [refBusy, setRefBusy] = useState(false)
+  const [loraEdit, setLoraEdit] = useState(false)
+  const [loraName, setLoraName] = useState(a.lora_name ?? '')
+  const [loraStrength, setLoraStrength] = useState(a.lora_strength ?? 0.9)
   const { task, polling } = usePollTask(taskId, `image:${a.id}`)
 
   const loadCands = () =>
@@ -117,6 +120,50 @@ function AssetCard({ asset: a, onChanged }: { asset: Asset; onChanged: () => voi
               <span className="muted" style={{ fontSize: 12 }}>不上传也能生成（纯 SDXL 文生图）</span>
             </>
           )}
+        </div>
+      )}
+
+      {/* 角色专属：一致性 LoRA（专业级，优先于 FaceID/IP-Adapter） */}
+      {a.type === 'character' && (
+        <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {a.lora_name ? (
+            <>
+              <span className="badge green">LoRA: {a.lora_name}</span>
+              <span className="muted" style={{ fontSize: 12 }}>强度 {a.lora_strength} · 生成首帧自动挂载</span>
+              <button style={{ padding: '2px 8px', fontSize: 12 }}
+                      onClick={e => { e.stopPropagation(); setLoraEdit(!loraEdit) }}>修改</button>
+              <button className="danger" style={{ padding: '2px 8px', fontSize: 12 }}
+                      onClick={async e => { e.stopPropagation();
+                        if (!window.confirm('移除该角色的 LoRA？')) return
+                        try { await setAssetLora(a.id, '', a.lora_strength); await onChanged() } catch (err: any) { setError(err.message) }
+                      }}>移除</button>
+            </>
+          ) : (
+            <>
+              <span className="badge gray">未设 LoRA</span>
+              <button style={{ padding: '2px 8px', fontSize: 12 }}
+                      onClick={e => { e.stopPropagation(); setLoraEdit(!loraEdit) }}>➕ 设置 LoRA</button>
+              <span className="muted" style={{ fontSize: 12 }}>训练角色 LoRA 后填文件名，一致性最佳</span>
+            </>
+          )}
+        </div>
+      )}
+      {a.type === 'character' && loraEdit && (
+        <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+             onClick={e => e.stopPropagation()}>
+          <input type="text" placeholder="models/loras 下的文件名，如 linyuan.safetensors"
+                 value={loraName} onChange={e => setLoraName(e.target.value)}
+                 style={{ flex: 1, minWidth: 200, padding: '4px 8px' }} />
+          <label className="muted" style={{ fontSize: 12 }}>强度</label>
+          <input type="number" min={0} max={1.5} step={0.05} value={loraStrength}
+                 onChange={e => setLoraStrength(Number(e.target.value))}
+                 style={{ width: 64, padding: '4px 8px' }} />
+          <button className="primary" disabled={!loraName.trim()}
+                  onClick={async () => {
+                    setError(null)
+                    try { await setAssetLora(a.id, loraName.trim(), loraStrength); setLoraEdit(false); await onChanged() }
+                    catch (err: any) { setError(err.message) }
+                  }}>保存</button>
         </div>
       )}
 

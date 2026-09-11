@@ -103,9 +103,12 @@ class Asset(Base):
     type: Mapped[str] = mapped_column(String(16))                 # character/scene/prop
     name: Mapped[str] = mapped_column(String(128))
     description: Mapped[str] = mapped_column(Text, default="")
+    identity_anchor: Mapped[str] = mapped_column(Text, default="")  # 全剧不可变的身份锚点（英文结构化描述），首帧生成强制注入
     extra: Mapped[dict] = mapped_column(JSON, default=dict)       # 性别/年龄/服装等
     reference_image: Mapped[str | None] = mapped_column(String(512))
     standard_image: Mapped[str | None] = mapped_column(String(512))  # 锁定的标准照 URL
+    lora_name: Mapped[str | None] = mapped_column(String(256), nullable=True)   # ComfyUI models/loras 下的 LoRA 文件名（角色一致性）
+    lora_strength: Mapped[float] = mapped_column(Float, default=0.9)            # LoRA 强度 0~1.2
     status: Mapped[AssetStatus] = mapped_column(Enum(AssetStatus), default=AssetStatus.pending)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

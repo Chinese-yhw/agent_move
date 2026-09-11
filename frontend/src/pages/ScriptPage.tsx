@@ -399,7 +399,7 @@ export default function ScriptPage() {
             <button disabled={busy} onClick={() => fileRef.current?.click()}>📄 上传分镜表 txt/md</button>
             <input ref={fileRef} type="file" accept=".txt,.md" style={{ display: 'none' }} onChange={onUploadTxt} />
             <button disabled={busy} onClick={() => csvRef.current?.click()}>📑 上传 CSV 提示词</button>
-            <input ref={csvRef} type="file" accept=".csv" style={{ display: 'none' }} onChange={onUploadCsv} />
+            <input ref={csvRef} type="file" accept=".csv,.txt" style={{ display: 'none' }} onChange={onUploadCsv} />
             <button className="primary" disabled={busy || shots.length === 0} onClick={submitShots}>批量提交分镜</button>
           </div>
 

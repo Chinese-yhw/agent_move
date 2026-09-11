@@ -110,14 +110,19 @@ export const uploadAssetListTxt = (projectId: number, file: File, scriptId?: num
   return reqForm<{ created: number; parsed: number; linked_shots: number }>(
     `/api/projects/${projectId}/assets/upload`, form)
 }
-export const updateAsset = (assetId: number, description: string) =>
-  req<Asset>(`/api/assets/${assetId}`, { method: 'PATCH', body: JSON.stringify({ description }) })
+export const updateAsset = (assetId: number, patch: { description?: string; identity_anchor?: string }) =>
+  req<Asset>(`/api/assets/${assetId}`, { method: 'PATCH', body: JSON.stringify(patch) })
 /** 上传角色参考脸图（FaceID 用）。只有 character 类型素材可用。 */
 export const uploadReferenceImage = (assetId: number, file: File) => {
   const form = new FormData()
   form.append('file', file)
   return reqForm<Asset>(`/api/assets/${assetId}/reference-image`, form)
 }
+/** 设置角色一致性 LoRA：指定 ComfyUI models/loras/ 下的文件名 + 强度。 */
+export const setAssetLora = (assetId: number, loraName: string, strength = 0.9) =>
+  req<Asset>(`/api/assets/${assetId}/lora`, {
+    method: 'POST', body: JSON.stringify({ lora_name: loraName, strength }),
+  })
 
 // ---------- 标准照 ----------
 export const genImages = (assetId: number, n = 4, width = 832, height = 480) =>

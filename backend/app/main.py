@@ -33,6 +33,9 @@ async def startup():
         for ddl in (
             "ALTER TABLE storyboard_shots ADD COLUMN first_frame_asset_id INTEGER",
             "ALTER TABLE dialogues ADD COLUMN speaker_name VARCHAR(32) DEFAULT ''",
+            "ALTER TABLE assets ADD COLUMN lora_name VARCHAR(256)",
+            "ALTER TABLE assets ADD COLUMN lora_strength FLOAT DEFAULT 0.9",
+            "ALTER TABLE assets ADD COLUMN identity_anchor TEXT DEFAULT ''",
         ):
             try:
                 await conn.execute(text(ddl))

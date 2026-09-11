@@ -214,7 +214,7 @@ def parse_storyboard_table(text: str) -> list[dict]:
 _SECTION_MAP = {"角色": "character", "物品": "prop", "道具": "prop", "场景": "scene"}
 _META_KEYS = ("类型", "性别", "主体来源", "分类", "场景类型", "物品类别",
               "主体", "变体", "output_id", "音色描述")
-_FIELD_RE = re.compile(r"^(类型|性别|主体来源|分类|场景类型|物品类别|主体|变体|output_id|音色描述)[：:]\s*(.*)$")
+_FIELD_RE = re.compile(r"^(类型|性别|主体来源|分类|场景类型|物品类别|主体|变体|output_id|音色描述|identity_anchor|身份锚点|锚点)[：:]\s*(.*)$")
 
 
 def parse_asset_list(text: str) -> list[dict]:
@@ -247,7 +247,7 @@ def parse_asset_list(text: str) -> list[dict]:
         if not m and not is_meta and len(line) <= 24 and not re.match(r"^[\d一二三四五六七八九十]+[、.]", line):
             flush()
             current = {"type": section, "name": line, "description": "",
-                       "variants": [], "voice": "", "role": ""}
+                       "variants": [], "voice": "", "role": "", "identity_anchor": ""}
             last_variant_key = "description"
             continue
         if m and current is not None:
@@ -263,6 +263,8 @@ def parse_asset_list(text: str) -> list[dict]:
                 pass  # 占位标记，忽略
             elif key == "音色描述":
                 current["voice"] = val
+            elif key in ("identity_anchor", "身份锚点", "锚点"):
+                current["identity_anchor"] = val
             elif key in ("类型", "场景类型", "物品类别"):
                 current["role"] = (current["role"] + " / " + val).strip(" /") if current["role"] else val
             elif key == "性别":
@@ -278,6 +280,7 @@ def parse_asset_list(text: str) -> list[dict]:
 # ---------- 素材清单（标准照提示词式 + 镜号对应） ----------
 _STD_PHOTO_RE = re.compile(r"^【(.+?)[·・]标准照】\s*$")
 _SHOT_BLOCK_RE = re.compile(r"^【镜号\s*(\d+)\s*】\s*$")
+_ANCHOR_LINE_RE = re.compile(r"^(identity_anchor|身份锚点|锚点)[：:]\s*(.*)$")
 
 
 def _classify_asset_type(name: str, prompt: str) -> str:
@@ -334,7 +337,8 @@ def parse_std_photo_list(text: str) -> dict | None:
             flush_asset()
             cur_shot = None  # 标准照区不再属于任何镜号块
             cur_asset = {"type": "prop", "name": m_std.group(1).strip(),
-                         "description": "", "variants": [], "voice": "", "role": ""}
+                         "description": "", "variants": [], "voice": "", "role": "",
+                         "identity_anchor": ""}
             continue
         # 分隔线（====、----）与章节标题（三、…）：结束当前块
         if re.fullmatch(r"[=—\-]{3,}", line) or re.match(r"^[一二三四五六七八九十]+、", line):
@@ -342,7 +346,11 @@ def parse_std_photo_list(text: str) -> dict | None:
             cur_shot = None
             continue
         if cur_asset is not None:
-            prompt_lines.append(line)
+            m_anchor = _ANCHOR_LINE_RE.match(line)
+            if m_anchor:
+                cur_asset["identity_anchor"] = m_anchor.group(2).strip()
+            else:
+                prompt_lines.append(line)
             continue
         if cur_shot is not None:
             item = line.lstrip("-·•* ").strip()

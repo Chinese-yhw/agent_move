@@ -16,7 +16,7 @@ from app.models import (
 from app.schemas import (
     ApproveVideoReq, ComposeReq, GenerateImagesReq, GenerateVideoReq,
     ProjectCreate, ProjectOut, ScriptCreate, ScriptUpdate, ScriptOut,
-    SetFirstFrameReq,
+    SetFirstFrameReq, SetLoraReq,
     ShotIn, ShotsImport, ShotOut, ShotRefOut, DialogueBrief,
     TtsGenerateReq, AssetOut, AssetUpdate, SelectCandidateReq, TaskOut,
 )
@@ -549,10 +549,14 @@ async def upload_asset_list_txt(project_id: int, file: UploadFile = File(...),
             if a is None:
                 db.add(Asset(project_id=project_id, type=it["type"], name=it["name"],
                              description=it["description"],
+                             identity_anchor=it.get("identity_anchor", "") or "",
                              extra={"role": it.get("role", ""), "voice": it.get("voice", "")}))
                 created += 1
-            elif not a.description:
-                a.description = it["description"]  # 旧素材缺描述时用提示词补上
+            else:
+                if not a.description:
+                    a.description = it["description"]  # 旧素材缺描述时用提示词补上
+                if it.get("identity_anchor") and not a.identity_anchor:
+                    a.identity_anchor = it["identity_anchor"]
         parsed = len(items)
         await db.flush()
     else:
@@ -565,17 +569,19 @@ async def upload_asset_list_txt(project_id: int, file: UploadFile = File(...),
         existing = {(a.type, a.name) for a in (await db.execute(
             select(Asset).where(Asset.project_id == project_id))).scalars().all()}
         for it in items:
-            entries = [(it["name"], it["description"])]
+            anchor = it.get("identity_anchor", "") or ""
+            entries = [(it["name"], it["description"], anchor)]
             for v in it["variants"]:
-                entries.append((f"{it['name']}·{v['name']}", v["description"]))
-            for name, desc in entries:
+                # 变体默认继承主体锚点（同一角色的不同状态，身份特征一致）
+                entries.append((f"{it['name']}·{v['name']}", v["description"], anchor))
+            for name, desc, anc in entries:
                 if (it["type"], name) in existing:
                     continue
                 extra = dict(it.get("extra") or {})
                 extra.update({"role": it.get("role", ""), "voice": it.get("voice", ""),
                               "base_name": it["name"]})
                 db.add(Asset(project_id=project_id, type=it["type"], name=name,
-                             description=desc, extra=extra))
+                             description=desc, identity_anchor=anc, extra=extra))
                 existing.add((it["type"], name))
                 created += 1
         parsed = len(items)
@@ -711,7 +717,8 @@ async def extract_assets(script_id: int, db: AsyncSession = Depends(get_db)):
                 db.add(Asset(
                     project_id=script.project_id, type=typ,
                     name=item.get("name", "未命名"), description=desc,
-                    extra={k: v for k, v in item.items() if k not in ("name", "appearance", "description")},
+                    identity_anchor=item.get("identity_anchor", "") or "",
+                    extra={k: v for k, v in item.items() if k not in ("name", "appearance", "description", "identity_anchor")},
                 ))
                 saved[key] += 1
         await db.commit()
@@ -755,8 +762,33 @@ async def update_asset(asset_id: int, req: AssetUpdate, db: AsyncSession = Depen
         raise HTTPException(404)
     if req.description is not None:
         a.description = req.description
+    if req.identity_anchor is not None:
+        a.identity_anchor = req.identity_anchor
     if req.reference_image is not None:
         a.reference_image = req.reference_image
+    if req.lora_name is not None:
+        a.lora_name = req.lora_name or None
+    if req.lora_strength is not None:
+        a.lora_strength = req.lora_strength
+    await db.commit()
+    await db.refresh(a)
+    return a
+
+
+@router.post("/assets/{asset_id}/lora", response_model=AssetOut)
+async def set_asset_lora(asset_id: int, req: SetLoraReq, db: AsyncSession = Depends(get_db)):
+    """设置角色一致性 LoRA：直接指定 ComfyUI models/loras/ 下的文件名。
+
+    LoRA 文件需已存在于 AutoDL 的 ComfyUI models/loras/ 目录（手动上传或训练产出）。
+    设置后，引用该角色的镜头生成首帧时会自动挂载此 LoRA。
+    """
+    a = await db.get(Asset, asset_id)
+    if not a:
+        raise HTTPException(404)
+    if a.type != "character":
+        raise HTTPException(400, "只有角色类型素材可以设置 LoRA")
+    a.lora_name = req.lora_name.strip() or None
+    a.lora_strength = max(0.0, min(req.strength, 1.5))
     await db.commit()
     await db.refresh(a)
     return a
@@ -930,6 +962,7 @@ async def set_first_frame(shot_id: int, req: SetFirstFrameReq,
         s.first_frame_asset_id = req.asset_id
     else:
         s.first_frame_asset_id = None
+        s.first_frame_image = None
     await db.commit()
     return {"ok": True, "first_frame_asset_id": s.first_frame_asset_id}
 
@@ -1056,15 +1089,20 @@ async def get_task(task_id: int, db: AsyncSession = Depends(get_db)):
 async def cancel_task(task_id: int, db: AsyncSession = Depends(get_db)):
     """取消正在执行的异步任务：给 Celery 发 revoke 信号 + 改 DB 状态。
     注意：已经在 ComfyUI 跑的任务无法中断，会继续跑完，但 DB 状态会被标记 cancelled。"""
-    from app.tasks.celery_app import celery_app
     t = await db.get(Task, task_id)
     if not t:
         raise HTTPException(404, "任务不存在")
     if t.status in (TaskStatus.success, TaskStatus.failed, TaskStatus.cancelled):
         raise HTTPException(400, f"任务已结束（{t.status.value}）")
-    # 给 Celery worker 发 revoke —— 如果还没开始会跳过，正在跑的会等当前步骤结束后停止
-    if t.celery_id:
-        celery_app.control.revoke(t.celery_id, terminate=False, signal='SIGTERM')
+    # 给 Celery worker 发 revoke —— 如果还没开始会跳过，正在跑的会等当前步骤结束后停止。
+    # eager 模式（本地无 Redis）下任务在 API 进程后台线程执行，没有 worker 可通知，
+    # 且 control.revoke 会因连不上 broker 抛异常，故仅在真实 broker 模式下发送。
+    from app.tasks.celery_app import celery_app
+    if t.celery_id and not celery_app.conf.task_always_eager:
+        try:
+            celery_app.control.revoke(t.celery_id, terminate=False, signal='SIGTERM')
+        except Exception:  # noqa: BLE001
+            pass  # broker 不可达不影响取消语义：DB 状态照常置为 cancelled
     t.status = TaskStatus.cancelled
     t.error = "用户取消"
     from datetime import datetime
@@ -1079,6 +1117,11 @@ async def delete_image_candidate(cid: int, db: AsyncSession = Depends(get_db)):
     c = await db.get(ImageCandidate, cid)
     if not c:
         raise HTTPException(404, "候选不存在")
+    # 若删的是镜头当前生效的首帧，清空该镜头的 first_frame_image，避免残留失效引用
+    if c.shot_id:
+        s = await db.get(StoryboardShot, c.shot_id)
+        if s and s.first_frame_image == c.image_url:
+            s.first_frame_image = None
     # 删磁盘文件
     url = c.image_url or ""
     local = url.replace("/media/", "")

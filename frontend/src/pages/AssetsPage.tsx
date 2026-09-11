@@ -22,6 +22,7 @@ export default function AssetsPage() {
   const [msg, setMsg] = useState<string | null>(null)
   const [editing, setEditing] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
+  const [anchorDraft, setAnchorDraft] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const { task, polling } = usePollTask(taskId)
 
@@ -58,7 +59,7 @@ export default function AssetsPage() {
 
   const saveDesc = async (a: Asset) => {
     try {
-      await updateAsset(a.id, draft)
+      await updateAsset(a.id, { description: draft, identity_anchor: anchorDraft })
       setEditing(null)
       refresh()
     } catch (e: any) {
@@ -106,18 +107,40 @@ export default function AssetsPage() {
             <span className={`badge ${a.status === '已锁定' ? 'green' : a.status === '已生成' ? 'blue' : 'gray'}`}>{a.status}</span>
             <div className="grow">
               {editing === a.id ? (
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <label className="muted" style={{ fontSize: 12 }}>外观描述（中文，可含动作/氛围）</label>
                   <textarea style={{ minHeight: 48 }} value={draft} onChange={e => setDraft(e.target.value)} />
-                  <button className="primary" onClick={() => saveDesc(a)}>保存</button>
-                  <button onClick={() => setEditing(null)}>取消</button>
+                  {a.type !== 'prop' && (
+                    <>
+                      <label className="muted" style={{ fontSize: 12 }}>
+                        🔒 身份锚点 identity_anchor（英文，全剧不可变，强制注入每个镜头首帧）
+                      </label>
+                      <textarea
+                        style={{ minHeight: 48, borderColor: 'var(--yellow)' }}
+                        placeholder='例：fictional young man, square jaw, sharp dark eyes, black hair tied in topknot, plain teal ancient robe'
+                        value={anchorDraft} onChange={e => setAnchorDraft(e.target.value)} />
+                    </>
+                  )}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="primary" onClick={() => saveDesc(a)}>保存</button>
+                    <button onClick={() => setEditing(null)}>取消</button>
+                  </div>
                 </div>
               ) : (
-                <span className="muted">{a.description || '（无描述）'}</span>
+                <>
+                  <span className="muted">{a.description || '（无描述）'}</span>
+                  {a.type !== 'prop' && a.identity_anchor && (
+                    <div style={{ marginTop: 4, fontSize: 12 }}>
+                      <span className="badge green">🔒 锚点</span>{' '}
+                      <span className="muted" style={{ fontStyle: 'italic' }}>{a.identity_anchor}</span>
+                    </div>
+                  )}
+                </>
               )}
             </div>
             {editing !== a.id && (
               <>
-                <button onClick={() => { setEditing(a.id); setDraft(a.description) }}>编辑描述</button>
+                <button onClick={() => { setEditing(a.id); setDraft(a.description); setAnchorDraft(a.identity_anchor || '') }}>编辑</button>
                 <button
                   className="danger"
                   title="删除素材及其全部候选图"

@@ -1,0 +1,62 @@
+【镜号1】
+林澈
+深夜公寓
+【林澈·标准照】
+锚点：fictional young Chinese man, mid-20s, lean face, sharp dark eyes, short messy black hair, thin-framed glasses, dark gray hoodie, programmer, tired but focused
+写实电影感，青年男性程序员定妆照，二十五六岁，清瘦脸型，深色短发略显凌乱，戴细框眼镜，穿深灰色连帽卫衣，神情疲惫但眼神专注，冷蓝色屏幕光映在侧脸，背景简洁暗色
+
+【深夜公寓·标准照】
+锚点：fictional late-night single programmer apartment, triple monitors glowing cold blue, scattered coffee cups and keyboard, blurred city night outside window, cold blue dark tone, quiet and oppressive
+写实电影感，深夜单身程序员公寓概念图，三联屏亮着冷蓝色光，桌面散落咖啡杯和键盘，窗外城市夜景模糊，整体色调冷蓝偏暗，安静压抑
+
+【镜号3】
+林澈
+电脑屏幕
+【电脑屏幕·标准照】
+锚点：dark theme code editor interface, central dialogue box labeled Echo, blinking cursor, cold blue tone, screen reflection
+写实电影感，代码编辑器界面特写，深色主题，中央对话框显示Echo，光标闪烁，屏幕反光映出模糊人脸，冷蓝色调
+
+【镜号5】
+Echo
+【Echo·标准照】
+锚点：abstract AI entity, cold blue glowing text interface, rhythmic blinking cursor, no physical body, mysterious, quiet, alive
+抽象AI视觉，冷蓝色发光文字界面，光标节奏性闪烁，无实体形象，整体呈现为屏幕上的对话文字与光晕，神秘、安静、有生命感
+
+【镜号8】
+咖啡杯
+【咖啡杯·标准照】
+锚点：three white coffee cups on desk, third cup almost empty, cold blue screen light on rims, tired daily life
+写实电影感，桌面三只白色咖啡杯并排，第三杯只剩底部残渍，冷蓝色屏幕光照亮杯沿，生活感与疲惫感并存
+
+【镜号20】
+林澈
+生日夜
+【生日夜·标准照】
+锚点：dark room at midnight, computer screen glowing, unopened birthday cake box on desk corner, lonely quiet atmosphere, gray tone
+写实电影感，凌晨昏暗房间，电脑屏幕亮着，桌角放着没拆的生日蛋糕盒，林澈独自坐在光里，画面偏灰，孤独安静
+
+【镜号30】
+林澈
+醉酒闪回
+【醉酒闪回·标准照】
+锚点：two years ago midnight, young man drunk at computer, scattered bottles, screen light on face, overexposed blurry, fragile mood
+写实电影感，两年前凌晨，林澈喝醉坐在电脑前，桌上酒瓶散乱，屏幕光映脸，画面过曝失焦，情绪脆弱模糊
+
+【镜号42】
+代码注释
+【代码注释·标准照】
+锚点：first version code interface, highlighted comment line, soft screen glow, keyboard faintly visible
+写实电影感，三年前第一版代码界面特写，注释行高亮：希望这个东西，能让人不那么孤单。屏幕柔光，键盘隐约可见
+
+【镜号49】
+Echo语音模块
+【Echo语音模块·标准照】
+锚点：text-to-speech module interface, slightly pulsing audio waveform, electronic synthetic feel, cold blue with a touch of warm light, quiet companionship
+写实电影感，文本转语音模块界面，音频波形轻微跳动，电子合成感，冷蓝色调中带一点暖光，安静陪伴感
+
+【镜号61】
+林澈
+公寓结尾
+【公寓结尾·标准照】
+锚点：late-night apartment wide view, young man sitting before triple monitors, cold blue light with a touch of warmth, coffee cups quiet on desk, stable restrained tender
+写实电影感，深夜公寓全景，林澈坐在三联屏前，冷蓝色光中多了一点温度，桌面咖啡杯安静摆放，画面稳定、克制、温柔
